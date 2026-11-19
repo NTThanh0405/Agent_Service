@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Dashboard</title>
+<link rel="stylesheet" href="/static/dashboard.css">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js" defer></script>
+<script src="/static/dashboard.js" defer></script>
+</head>
+<body data-slug="{{SLUG}}">
+<header class="top">
+  <a class="back" href="/dashboards" title="Danh sách dashboard">←</a>
+  <div class="titles">
+    <h1 id="title">Đang tải…</h1>
+    <p id="desc"></p>
+  </div>
+  <div class="status">
+    <span id="updated"></span>
+    <button id="refresh" type="button" title="Làm mới ngay">⟳</button>
+  </div>
+</header>
+<form id="filters" class="filters"></form>
+<main id="grid" class="grid"></main>
+<div id="error" class="error" hidden></div>
+</body>
+</html>

@@ -1,0 +1,19 @@
+# Workspace demo: chuỗi quán cà phê giả lập, dữ liệu SQLite tạo bằng `bizagent seed-demo`.
+name: demo
+display_name: "Chuỗi cà phê Demo"
+description: "Chuỗi 3 quán cà phê (TP.HCM, Hà Nội, Đà Nẵng), bán tại quán và qua GrabFood, ShopeeFood, website."
+language: vi
+timezone: Asia/Ho_Chi_Minh
+currency: VND
+week_start: monday
+
+roles:
+  admin: ["*"]
+  manager: [sales, warehouse]
+  staff: []
+
+admin_roles: [admin]
+grant_roles: [admin, manager]
+
+prompt_vars:
+  tone: "ngắn gọn, thân thiện, xưng 'tôi' gọi 'anh/chị'"

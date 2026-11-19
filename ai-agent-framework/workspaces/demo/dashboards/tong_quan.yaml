@@ -1,0 +1,23 @@
+# Dashboard sống: sửa file này là trang tự cập nhật (không cần restart).
+title: "Tổng quan doanh thu"
+description: "Chuỗi cà phê Demo — doanh thu, kênh bán, cửa hàng, món bán chạy"
+refresh_seconds: 60
+roles: [admin, manager]
+
+filters:
+  period: {type: period, label: "Kỳ", default: "30 ngày qua"}
+  cua_hang: {type: select, label: "Cửa hàng", dataset: ds_cua_hang, column: cua_hang}
+
+widgets:
+  - {type: kpi, title: "Doanh thu", dataset: kpi, value: doanh_thu, compare: doanh_thu_truoc, format: currency, width: 4}
+  - {type: kpi, title: "Số đơn", dataset: kpi, value: so_don, compare: so_don_truoc, width: 4}
+  - {type: kpi, title: "Giá trị đơn TB", dataset: kpi, value: aov, compare: aov_truoc, format: currency, width: 4}
+  - {type: area, title: "Doanh thu theo ngày và kênh", dataset: theo_ngay_kenh, x: ngay, y: [doanh_thu],
+     series: kenh, stack: true, format: currency, width: 8}
+  - {type: pie, title: "Tỉ trọng kênh", dataset: theo_kenh, x: kenh, y: [doanh_thu], format: currency, width: 4}
+  - {type: bar, title: "Doanh thu theo cửa hàng (không theo bộ lọc cửa hàng)", dataset: theo_cua_hang,
+     x: cua_hang, y: [doanh_thu], format: currency, width: 6}
+  - {type: custom, title: "Đạt mục tiêu tháng này (widget code tuỳ chỉnh)", dataset: dat_muc_tieu,
+     script: tien_do_muc_tieu.js, width: 6, height: 260}
+  - {type: table, title: "Top món bán chạy", dataset: top_mon, columns: [mon, nhom, so_luong, doanh_thu],
+     format: number, width: 12}

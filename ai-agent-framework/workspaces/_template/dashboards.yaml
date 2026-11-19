@@ -1,0 +1,12 @@
+# Chọn cách dựng dashboard (bật một hoặc cả hai). Hướng dẫn: docs/DASHBOARDS.md
+public_url: "${BIZAGENT_PUBLIC_URL:-http://127.0.0.1:8000}"
+
+live:                                # 1. Dashboard sống tích hợp sẵn: /dashboards
+  enabled: true
+  agent_can_create: [admin]
+
+powerbi:                             # 2. Đưa dataset sang Power BI: /powerbi
+  enabled: false
+  datasets: []                       # tên dataset trong datasets.yaml
+  # export: {every: 1h, formats: [parquet, csv]}
+  reports: {}

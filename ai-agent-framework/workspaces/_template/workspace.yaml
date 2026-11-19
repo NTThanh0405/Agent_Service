@@ -1,0 +1,28 @@
+# workspace.yaml — thông tin của MỘT doanh nghiệp. Tạo workspace mới: bizagent init <ten>
+name: my_company                    # tên kỹ thuật (trùng tên thư mục)
+display_name: "Công ty của tôi"     # tên hiện trong prompt và giao diện
+description: "Mô tả ngắn: ngành nghề, quy mô, kênh bán. Agent đọc đoạn này để hiểu bối cảnh."
+language: vi                        # ngôn ngữ trả lời
+timezone: Asia/Ho_Chi_Minh
+currency: VND
+week_start: monday                  # monday | sunday
+
+# Role -> nguồn dữ liệu được xem (tên nguồn trong sources.yaml). "*" = mọi nguồn. Role không có ở đây = không xem gì.
+roles:
+  admin: ["*"]
+  manager: ["*"]
+  staff: []
+
+admin_roles: [admin]            # thêm/xoá người dùng, gửi báo cáo, xem audit (docs/ADMIN.md)
+grant_roles: [admin, manager]   # cấp quyền xem nguồn có hạn dùng cho người khác: /capquyen
+
+# Biến tuỳ ý cho prompt: dùng {{ vars.ten_bien }} trong prompts/*.j2
+prompt_vars:
+  tone: "ngắn gọn, lịch sự, xưng 'tôi' gọi 'anh/chị'"
+
+# Lưu phiên chat, audit log (mặc định SQLite trong data/). Xem docs/CHANNELS.md
+# state:
+#   url: "postgresql+psycopg://${STATE_DB_USER}:${STATE_DB_PASSWORD}@localhost:5432/bizagent_state"
+#   idle_days: 30
+#   max_threads_per_user: 20
+#   audit_days: 180

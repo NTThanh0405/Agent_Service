@@ -1,0 +1,82 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bizagent"
+version = "0.1.0"
+description = "Khung AI agent phân tích dữ liệu doanh nghiệp: nhiều database, nhiều API, nhiều model AI, prompt theo từng doanh nghiệp."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "jinja2>=3.1",
+    "sqlalchemy>=2.0",
+    "sqlglot>=25.0",
+    "httpx>=0.27",
+    "tzdata>=2024.1",
+    "langgraph>=0.2",
+    "langchain-core>=0.3",
+    "langchain>=0.3",          # init_chat_model: một hàm tạo model cho mọi nhà cung cấp
+    "duckdb>=1.1",             # kho dữ liệu nội bộ + chạy SQL trên Sheets/file/kết quả API
+    "langgraph-checkpoint-sqlite>=2.0",   # lưu phiên chat (mặc định SQLite)
+    "aiosqlite>=0.20",
+]
+
+[project.optional-dependencies]
+# --- Model AI: cài nhà cung cấp nào thì dùng được nhà cung cấp đó ---
+anthropic = ["langchain-anthropic>=0.3"]
+openai = ["langchain-openai>=0.2"]          # ChatGPT, Azure OpenAI, mọi API tương thích OpenAI (vLLM, LM Studio, OpenRouter...)
+google = ["langchain-google-genai>=2.0"]    # Gemini
+deepseek = ["langchain-deepseek>=0.1"]
+ollama = ["langchain-ollama>=0.2"]          # model chạy trên máy
+llm-all = ["bizagent[anthropic,openai,google,deepseek,ollama]"]
+# --- Database: driver cho từng loại ---
+postgres = ["psycopg[binary]>=3.2"]
+mysql = ["pymysql>=1.1"]
+mssql = ["pyodbc>=5.1"]                     # cần cài thêm "ODBC Driver 18 for SQL Server" của Microsoft
+db-all = ["bizagent[postgres,mysql,mssql]"]
+# --- Nguồn khác ---
+gsheets = ["google-auth[requests]>=2.30"]  # Google Sheets bằng service account
+excel = ["openpyxl>=3.1"]                   # đọc file .xlsx trong nguồn type: files
+mcp = ["mcp>=1.2", "langchain-mcp-adapters>=0.1"]   # nguồn type: mcp + lệnh bizagent mcp-server
+postgres-state = ["langgraph-checkpoint-postgres>=2.0", "psycopg[binary,pool]>=3.2"]   # lưu phiên chat vào PostgreSQL
+# --- Kênh chat ---
+telegram = ["aiogram>=3.13"]
+all = ["bizagent[llm-all,postgres,mysql,telegram,gsheets,excel,mcp]"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.6"]
+
+[project.scripts]
+bizagent = "bizagent.cli:main"
+
+# Plugin bên ngoài đăng ký loại nguồn dữ liệu mới qua entry point này, ví dụ:
+# [project.entry-points."bizagent.sources"]
+# my_crm = "my_package.crm:CrmSource"
+
+[tool.setuptools.packages.find]
+include = ["bizagent*"]
+
+[tool.setuptools.package-data]
+bizagent = ["prompts/*.j2", "channels/static/*"]   # chat.html, dashboard.html/.js/.css
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning:langsmith.*"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["B027"]
+
+[tool.ruff.lint.per-file-ignores]
+"bizagent/channels/rest.py" = ["E501"]   # chuỗi HTML
+"bizagent/channels/admin.py" = ["E501"]

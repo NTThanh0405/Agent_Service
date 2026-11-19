@@ -1,0 +1,12 @@
+# Chép file này thành users.yaml (KHÔNG commit users.yaml: có ID thật của người dùng).
+# id: "<kênh>:<mã>"  — telegram:<Telegram ID, lấy bằng /myid>
+# role: phải có trong `roles` của workspace.yaml
+users:
+  - id: "telegram:123456789"
+    name: "Quản trị"
+    role: admin
+  # Tài khoản web (dashboard, Power BI): tạo password_hash bằng `bizagent hash-password <ten>`
+  # - id: "web:lan"
+  #   name: "Lan"
+  #   role: manager
+  #   password_hash: "scrypt$..."

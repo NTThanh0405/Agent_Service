@@ -1,0 +1,25 @@
+# Đồng bộ dữ liệu về kho (nguồn `warehouse`). Chạy tay: bizagent sync ; xem trạng thái: bizagent sync --status
+# Khi chạy `bizagent serve` / `bizagent telegram`, lịch dưới đây tự chạy trong nền (run_in_server: true).
+warehouse: warehouse
+run_in_server: true
+
+jobs:
+  doanh_thu_ngay:
+    from:
+      source: sales
+      sql: |
+        SELECT o.order_date AS ngay, o.store_id AS ma_cua_hang, s.name AS cua_hang, o.channel AS kenh,
+               COUNT(*) AS so_don, SUM(o.total_amount) AS doanh_thu
+        FROM orders o JOIN stores s ON s.id = o.store_id
+        WHERE o.status = 'completed'
+        GROUP BY o.order_date, o.store_id, s.name, o.channel
+    table: doanh_thu_ngay
+    mode: replace
+    every: 1h
+    types: {ngay: DATE}
+
+  muc_tieu_thang:
+    from: {source: ke_hoach, table: muc_tieu}
+    table: muc_tieu_thang
+    mode: replace
+    every: 30m

@@ -1,0 +1,80 @@
+# Dataset dùng chung cho dashboard sống và Power BI. Tham số: {{start}} {{end}} {{prev_start}} {{prev_end}}
+# (từ bộ lọc period) và tên các bộ lọc khác, vd {{cua_hang}} (NULL khi chọn "Tất cả").
+datasets:
+  kpi:
+    source: sales
+    description: "Doanh thu, số đơn, AOV kỳ này và kỳ trước"
+    sql: |
+      SELECT
+        SUM(CASE WHEN order_date BETWEEN {{start}} AND {{end}} THEN total_amount END) AS doanh_thu,
+        SUM(CASE WHEN order_date BETWEEN {{prev_start}} AND {{prev_end}} THEN total_amount END) AS doanh_thu_truoc,
+        COUNT(CASE WHEN order_date BETWEEN {{start}} AND {{end}} THEN 1 END) AS so_don,
+        COUNT(CASE WHEN order_date BETWEEN {{prev_start}} AND {{prev_end}} THEN 1 END) AS so_don_truoc,
+        1.0 * SUM(CASE WHEN order_date BETWEEN {{start}} AND {{end}} THEN total_amount END)
+          / NULLIF(COUNT(CASE WHEN order_date BETWEEN {{start}} AND {{end}} THEN 1 END), 0) AS aov,
+        1.0 * SUM(CASE WHEN order_date BETWEEN {{prev_start}} AND {{prev_end}} THEN total_amount END)
+          / NULLIF(COUNT(CASE WHEN order_date BETWEEN {{prev_start}} AND {{prev_end}} THEN 1 END), 0) AS aov_truoc
+      FROM orders o JOIN stores s ON s.id = o.store_id
+      WHERE status = 'completed' AND ({{cua_hang}} IS NULL OR s.name = {{cua_hang}})
+
+  theo_ngay_kenh:
+    source: sales
+    sql: |
+      SELECT order_date AS ngay, channel AS kenh, SUM(total_amount) AS doanh_thu
+      FROM orders o JOIN stores s ON s.id = o.store_id
+      WHERE status = 'completed' AND order_date BETWEEN {{start}} AND {{end}}
+        AND ({{cua_hang}} IS NULL OR s.name = {{cua_hang}})
+      GROUP BY order_date, channel ORDER BY order_date
+
+  theo_cua_hang:
+    source: sales
+    sql: |
+      SELECT s.name AS cua_hang, SUM(o.total_amount) AS doanh_thu, COUNT(*) AS so_don
+      FROM orders o JOIN stores s ON s.id = o.store_id
+      WHERE o.status = 'completed' AND o.order_date BETWEEN {{start}} AND {{end}}
+      GROUP BY s.name ORDER BY doanh_thu DESC
+
+  theo_kenh:
+    source: sales
+    sql: |
+      SELECT channel AS kenh, SUM(total_amount) AS doanh_thu
+      FROM orders o JOIN stores s ON s.id = o.store_id
+      WHERE status = 'completed' AND order_date BETWEEN {{start}} AND {{end}}
+        AND ({{cua_hang}} IS NULL OR s.name = {{cua_hang}})
+      GROUP BY channel ORDER BY doanh_thu DESC
+
+  top_mon:
+    source: sales
+    description: "Món bán chạy trong kỳ"
+    sql: |
+      SELECT p.name AS mon, p.category AS nhom, SUM(i.quantity) AS so_luong, SUM(i.quantity * i.unit_price) AS doanh_thu
+      FROM order_items i JOIN orders o ON o.id = i.order_id JOIN products p ON p.id = i.product_id
+      WHERE o.status = 'completed' AND o.order_date BETWEEN {{start}} AND {{end}}
+      GROUP BY p.name, p.category ORDER BY so_luong DESC
+
+  ds_cua_hang:
+    source: sales
+    sql: "SELECT name AS cua_hang FROM stores ORDER BY name"
+
+  # --- từ kho (dữ liệu đồng bộ, ghép chéo nguồn)
+  doanh_thu_ngay:
+    source: warehouse
+    description: "Doanh thu theo ngày x cửa hàng x kênh (kho đồng bộ)"
+    sql: "SELECT * FROM doanh_thu_ngay WHERE ngay BETWEEN {{start}} AND {{end}}"
+    max_rows: 100000
+
+  muc_tieu_thang:
+    source: warehouse
+    description: "Mục tiêu tháng theo cửa hàng (từ file kế hoạch)"
+    sql: "SELECT * FROM muc_tieu_thang"
+
+  dat_muc_tieu:
+    source: warehouse
+    description: "Thực tế so với mục tiêu tháng này"
+    sql: |
+      SELECT m.cua_hang, m.muc_tieu_doanh_thu_vnd AS muc_tieu, COALESCE(SUM(d.doanh_thu), 0) AS thuc_te,
+             ROUND(100.0 * COALESCE(SUM(d.doanh_thu), 0) / m.muc_tieu_doanh_thu_vnd, 1) AS ty_le_dat
+      FROM muc_tieu_thang m
+      LEFT JOIN doanh_thu_ngay d ON d.ma_cua_hang = m.ma_cua_hang AND strftime(d.ngay, '%Y-%m') = m.thang
+      WHERE m.thang = strftime(current_date, '%Y-%m')
+      GROUP BY m.cua_hang, m.muc_tieu_doanh_thu_vnd ORDER BY ty_le_dat DESC

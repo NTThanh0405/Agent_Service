@@ -1,0 +1,9 @@
+# Dataset dùng chung cho dashboard sống và Power BI. Xem docs/DASHBOARDS.md
+datasets: {}
+#  doanh_thu_theo_ngay:
+#    source: sales
+#    description: "Doanh thu theo ngày"
+#    sql: |
+#      SELECT order_date AS ngay, SUM(total_amount) AS doanh_thu
+#      FROM orders WHERE order_date BETWEEN {{start}} AND {{end}}
+#      GROUP BY order_date ORDER BY order_date

@@ -1,0 +1,23 @@
+# Chọn cách dựng dashboard: bật một hoặc cả hai.
+#   live    : dashboard sống tích hợp sẵn (/dashboards) — file trong dashboards/*.yaml
+#   powerbi : đưa dataset sang Power BI (/powerbi) — Power BI tự dựng báo cáo
+public_url: "${BIZAGENT_PUBLIC_URL:-http://127.0.0.1:8000}"   # địa chỉ người dùng mở (link gửi qua chat)
+
+live:
+  enabled: true
+  agent_can_create: [admin]       # role được nhờ agent tạo dashboard mới
+  cache_seconds: 30
+
+powerbi:
+  enabled: true
+  datasets: [doanh_thu_ngay, muc_tieu_thang, top_mon]   # tên trong datasets.yaml ("*" = tất cả)
+  default_period: "365 ngày qua"
+  export:                         # tuỳ chọn: ghi file cho Power BI (connector Folder/Parquet)
+    every: 1h
+    formats: [parquet, csv]
+    dir: data/powerbi
+  reports: {}                     # báo cáo Power BI có sẵn để agent gửi link, ví dụ:
+  #  tong_quan_pbi:
+  #    title: "Báo cáo Power BI - Tổng quan"
+  #    url: "https://app.powerbi.com/groups/.../reports/..."
+  #    description: "Báo cáo tháng do phòng tài chính dựng"

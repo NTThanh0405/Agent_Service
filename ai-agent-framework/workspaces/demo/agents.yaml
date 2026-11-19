@@ -1,0 +1,16 @@
+# Đổi model bằng một dòng, ví dụ:  default_model: openai:<ten-model>  (cần pip install "bizagent[openai]")
+default_model: anthropic:claude-sonnet-5-5
+
+models:
+  fast: anthropic:claude-haiku-5-5
+
+agent:
+  model: default
+  max_steps: 12
+  timeout_seconds: 120
+  max_tokens: 3000
+  temperature: null
+
+reviewer:                 # đối chiếu mọi con số trong câu trả lời với dữ liệu đã truy vấn (bằng code)
+  enabled: true
+  add_note: true

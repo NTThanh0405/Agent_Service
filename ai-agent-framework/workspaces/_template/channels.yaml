@@ -1,0 +1,7 @@
+# Kênh chat bật thêm ngoài web/Telegram. Hướng dẫn: docs/CHANNELS.md
+slack:
+  enabled: false             # SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET; Request URL: <public_url>/slack/events
+
+zalo:
+  enabled: false
+  signature: zalo_mac        # zalo_mac | off (khi chữ ký Zalo đổi định dạng; URL bí mật vẫn bảo vệ)

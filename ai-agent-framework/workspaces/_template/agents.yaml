@@ -1,0 +1,25 @@
+# agents.yaml — model AI và giới hạn của agent.
+# Model viết dạng "provider:model". Provider: anthropic (claude), openai (chatgpt), google_genai (gemini),
+# deepseek, ollama, azure_openai, groq, mistralai, bedrock. Cài gói tương ứng: pip install "bizagent[openai]"...
+# API key đặt trong .env: ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, DEEPSEEK_API_KEY...
+
+default_model: anthropic:claude-sonnet-5-5
+
+# Tên gọi tắt, dùng ở agent.model bên dưới
+models:
+  fast: anthropic:claude-haiku-5-5
+  # gpt: openai:<ten-model>
+  # gemini: google_genai:<ten-model>
+  # deepseek: deepseek:<ten-model>
+  # local:                            # mọi API tương thích OpenAI: vLLM, LM Studio, OpenRouter...
+  #   provider: openai
+  #   model: <ten-model>
+  #   base_url: http://localhost:1234/v1
+  #   api_key_env: LOCAL_LLM_KEY
+
+agent:
+  model: default          # "default", tên gọi tắt ở trên, hoặc "provider:model"
+  max_steps: 12           # số vòng gọi tool tối đa mỗi câu hỏi
+  timeout_seconds: 120
+  max_tokens: 3000
+  temperature: null       # để null; một số model (vd Claude đời mới) từ chối temperature

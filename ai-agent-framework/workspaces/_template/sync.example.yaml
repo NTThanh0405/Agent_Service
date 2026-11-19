@@ -1,0 +1,9 @@
+# Đổi tên thành sync.yaml để bật đồng bộ về kho. Hướng dẫn: docs/CONNECTORS.md (phần Kho dữ liệu và đồng bộ).
+warehouse: warehouse
+run_in_server: true
+jobs:
+  doanh_thu_ngay:
+    from: {source: sales, sql: "SELECT ... FROM ... GROUP BY ..."}
+    table: doanh_thu_ngay
+    mode: replace
+    every: 1h

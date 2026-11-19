@@ -1,0 +1,42 @@
+# Báo cáo định kỳ gửi qua Telegram / Zalo / Slack. Hướng dẫn: docs/REPORTS.md
+# Xem trước: bizagent report bao_cao_sang --preview --to telegram:123   ·   gửi ngay: bizagent report bao_cao_sang
+reports:
+  bao_cao_sang:
+    title: "Báo cáo sáng"
+    schedule: {at: "07:00"}                 # mọi ngày; hoặc days: [mon, tue, wed, thu, fri]
+    period: "hôm qua"
+    params: {cua_hang: null}                # dataset kpi có bộ lọc cửa hàng: null = tất cả
+    recipients: ["role:admin", "role:manager"]
+    sections:
+      - title: "Kết quả hôm qua"
+        dataset: kpi
+        kpis:
+          - {label: "Doanh thu", value: doanh_thu, compare: doanh_thu_truoc, format: currency}
+          - {label: "Số đơn", value: so_don, compare: so_don_truoc}
+          - {label: "Giá trị đơn TB", value: aov, compare: aov_truoc, format: currency}
+      - title: "Theo cửa hàng"
+        dataset: theo_cua_hang
+        table: {columns: [cua_hang, doanh_thu, so_don], max_rows: 5, formats: {doanh_thu: currency}}
+      - title: "Món bán chạy"
+        dataset: top_mon
+        table: {columns: [mon, so_luong], max_rows: 5}
+      - title: "Tiến độ mục tiêu tháng"
+        dataset: dat_muc_tieu
+        table: {columns: [cua_hang, ty_le_dat], max_rows: 5, formats: {ty_le_dat: percent}}
+    commentary: true
+    dashboard: tong_quan
+    max_delay_minutes: 180
+
+  bao_cao_tuan:
+    title: "Báo cáo tuần"
+    schedule: {at: "08:00", days: [mon]}
+    period: "tuần trước"
+    params: {cua_hang: null}
+    recipients: ["role:admin"]
+    sections:
+      - title: "Tổng quan tuần"
+        dataset: kpi
+        kpis:
+          - {label: "Doanh thu", value: doanh_thu, compare: doanh_thu_truoc, format: currency}
+          - {label: "Số đơn", value: so_don, compare: so_don_truoc}
+    dashboard: tong_quan

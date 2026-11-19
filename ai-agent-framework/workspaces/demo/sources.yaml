@@ -1,0 +1,25 @@
+sources:
+  # Database bán hàng (SQLite giả lập; thực tế là PostgreSQL/MySQL/SQL Server của POS)
+  sales:
+    type: sql
+    url: "sqlite:///${WORKSPACE_DIR}/data/demo.db"
+    description: "Bán hàng: cửa hàng, sản phẩm, khách hàng, đơn hàng, chi tiết đơn"
+    allowed_tables: ["main.*"]
+    default_schema: main
+    max_rows: 200
+    timeout_seconds: 15
+    mask_columns: ["phone", "email"]
+
+  # File kế hoạch do doanh nghiệp tự nhập (thực tế thường là Google Sheets: xem docs/CONNECTORS.md)
+  ke_hoach:
+    type: files
+    path: "${WORKSPACE_DIR}/files"
+    description: "Kế hoạch: mục tiêu doanh thu và số đơn theo tháng, theo cửa hàng"
+    cache_seconds: 60
+
+  # Kho tổng hợp: dữ liệu các nguồn được đồng bộ về đây (sync.yaml) để JOIN chéo nguồn
+  warehouse:
+    type: warehouse
+    path: "${WORKSPACE_DIR}/data/warehouse.duckdb"
+    description: "Kho tổng hợp (DuckDB): doanh thu theo ngày x cửa hàng x kênh, mục tiêu tháng. Dùng khi so sánh thực tế với mục tiêu"
+    max_rows: 200

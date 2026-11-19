@@ -1,0 +1,13 @@
+.git
+.venv
+venv
+**/__pycache__
+.pytest_cache
+.env
+.env.*
+workspaces/*
+!workspaces/_template
+!workspaces/demo
+workspaces/*/data
+workspaces/*/users.yaml
+tests

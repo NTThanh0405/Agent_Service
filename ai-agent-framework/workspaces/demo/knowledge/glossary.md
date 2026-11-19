@@ -1,0 +1,7 @@
+- **Doanh thu**: `SUM(orders.total_amount)` của đơn `status = 'completed'` (đơn vị VND, đã gồm VAT).
+- **Số đơn**: `COUNT(*)` đơn `status = 'completed'`. Đơn `cancelled` không tính vào doanh thu và số đơn.
+- **AOV**: Doanh thu / Số đơn.
+- **Tỉ lệ huỷ**: số đơn `cancelled` / tổng số đơn.
+- **Kênh bán** (`orders.channel`): `tai_quan` (tại quán), `grabfood`, `shopeefood`, `website`.
+- **Ngày bán**: dùng `orders.order_date` (chuỗi YYYY-MM-DD) để lọc theo ngày.
+- **Số lượng bán của món**: `SUM(order_items.quantity)` của đơn hoàn thành.
