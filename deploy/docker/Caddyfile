@@ -1,0 +1,6 @@
+# HTTPS tự động (Let's Encrypt) cho bizagent. Bật bằng: docker compose --profile https up -d
+# Cần: tên miền BIZAGENT_DOMAIN trỏ DNS về IP máy chủ, mở cổng 80 và 443.
+{$BIZAGENT_DOMAIN} {
+	encode gzip
+	reverse_proxy bizagent:8000
+}

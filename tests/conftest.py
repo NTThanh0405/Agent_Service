@@ -1,63 +1,51 @@
-# tests/conftest.py
-# Cấu hình dùng chung cho mọi test. Không kết nối DB, không đọc .env.
+from __future__ import annotations
 
-from types import SimpleNamespace
+import shutil
+from datetime import date
+from pathlib import Path
+from typing import Any
 
 import pytest
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 
+from bizagent.demo import create_demo_db, write_targets_csv
+from bizagent.workspace import load_workspace
 
-@pytest.fixture(autouse=True)
-def fake_settings(monkeypatch):
-    """guard.check_select cần db_schema; thay get_settings bằng giá trị giả."""
-    monkeypatch.setattr(
-        "app.db.guard.get_settings",
-        lambda: SimpleNamespace(db_schema="dwh"),
-    )
-
-# Cấu hình khối "tương lai" (coffee + house + misa qua API) để test phần quyền/tool API, vì
-# config/scopes.yaml thật hiện chỉ bật coffee. Dùng: def test_x(api_scopes_config): ...
-API_SCOPES_DATA = {
-    "scopes": {
-        "coffee": {"title": "Nyna Coffee (iPOS)", "source": "postgres", "tables": ["dwh.*"]},
-        "house": {"title": "Nyna House", "source": "api", "connector": "house"},
-        "misa": {"title": "Kế toán MISA", "source": "api", "connector": "misa"},
-    },
-    "role_scopes": {"boss": ["*"], "manager": ["*"], "staff": []},
-    "connectors": {
-        "house": {
-            "base_url_env": "TEST_HOUSE_URL",
-            "auth": {"type": "header", "header": "Authorization", "value_env": "TEST_HOUSE_TOKEN",
-                     "prefix": "Bearer "},
-            "max_days": 31,
-            "endpoints": {
-                "revenue_by_day": {"description": "Doanh thu House theo ngày", "path": "/rev",
-                                   "params": {"from": "{start}", "to": "{end}"}, "result_path": "data"},
-            },
-        },
-        "misa": {
-            "base_url_env": "TEST_MISA_URL",
-            "auth": {"type": "query", "param": "token", "value_env": "TEST_MISA_TOKEN"},
-            "endpoints": {
-                "revenue_summary": {"description": "Doanh thu kế toán", "method": "POST", "path": "/sum",
-                                    "params": {"from_date": "{start_dmy}", "to_date": "{end_dmy}"}},
-            },
-        },
-    },
-}
+ROOT = Path(__file__).resolve().parents[1]
+WORKSPACES = ROOT / "workspaces"
 
 
 @pytest.fixture
-def api_scopes_config(monkeypatch):
-    """Thay cấu hình khối bằng bản có house/misa (API) ở mọi nơi đã import load_scopes_config."""
-    import app.agent.graph as graph_mod
-    from app.agent import scopes
+def demo_ws(tmp_path: Path):
+    """Bản sao workspace demo kèm database mẫu (dữ liệu tới hết 2026-11-18)."""
+    dst = tmp_path / "demo"
+    shutil.copytree(WORKSPACES / "demo", dst, ignore=shutil.ignore_patterns("data", "files"))
+    create_demo_db(dst / "data" / "demo.db", days=30, today=date(2026, 11, 19))
+    write_targets_csv(dst / "files" / "muc_tieu.csv", today=date(2026, 11, 19))
+    return load_workspace(str(dst))
 
-    cfg = scopes.parse_scopes_config(API_SCOPES_DATA)
-    monkeypatch.setattr(scopes, "load_scopes_config", lambda *a, **k: cfg)
-    monkeypatch.setattr(graph_mod, "load_scopes_config", lambda *a, **k: cfg)
-    try:
-        from app.telegram import handlers
-        monkeypatch.setattr(handlers, "load_scopes_config", lambda *a, **k: cfg)
-    except Exception:  # handlers cần Settings; test không dùng handlers thì bỏ qua
-        pass
-    return cfg
+
+class FakeToolModel(BaseChatModel):
+    """Model giả: trả lần lượt các AIMessage cho sẵn, ghi lại tin nhắn đã nhận."""
+
+    responses: list[AIMessage]
+    seen: list[list[BaseMessage]] = []
+
+    @property
+    def _llm_type(self) -> str:
+        return "fake-tool-model"
+
+    def bind_tools(self, tools: Any, **kwargs: Any):
+        return self
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+        self.seen.append(list(messages))
+        msg = self.responses.pop(0)
+        return ChatResult(generations=[ChatGeneration(message=msg)])
+
+
+@pytest.fixture
+def fake_model_cls():
+    return FakeToolModel

@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# Bí mật
+.env
+.env.*
+!.env.example
+
+# Workspace: chỉ đưa template và demo lên GitHub; workspace của doanh nghiệp thật ở lại máy
+workspaces/*
+!workspaces/_template/
+!workspaces/demo/
+workspaces/*/users.yaml
+workspaces/*/data/
+logs/
+
+# Windows Service (sinh bởi deploy/windows/install.ps1, có WinSW .exe)
+deploy/windows/service/
