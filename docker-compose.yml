@@ -1,68 +1,63 @@
-# docker-compose.yml
-# (Chỉ dùng khi máy chủ có Docker. Windows Server 2022 không Docker: xem deploy/windows/ và README.)
-# Chạy cả hệ thống bằng một lệnh: docker compose up -d --build
-#   agent          : service LangGraph (bot Telegram long polling + FastAPI). KHÔNG mở port ra ngoài.
-#                    Bot chủ động hỏi Telegram nên không cần webhook/URL công khai.
-#   dashboards-web : nginx phục vụ file dashboard tên ngẫu nhiên (chỉ đọc) và file Chart.js
-#   cloudflared    : Cloudflare Tunnel, đưa dashboards-web ra Internet qua HTTPS
+# bizagent — bản Linux (Docker). Hướng dẫn: README.md, mục "Bản Linux (Docker)".
 #
-# Cấu hình trong .env (xem thêm .env mẫu):
-#   TELEGRAM_BOT_TOKEN, DATABASE_URL..., API key LLM
-#   DASHBOARD_BASE_URL=https://dashboard.nynahouse.com   (phải trùng Public Hostname bên dưới)
-#   DASHBOARD_TTL_HOURS=24
-#   CLOUDFLARE_TUNNEL_TOKEN=...
-#   CLOUDFLARED_IMAGE_TAG=latest   (nên ghim phiên bản đang chạy ổn, xem bằng: docker compose images)
+#   ./deploy/docker/setup.sh                       # lần đầu: tạo .env (sinh khoá bí mật), quyền thư mục
+#   docker compose up -d --build                   # web + bot Telegram + tác vụ nền: http://127.0.0.1:8000
+#   docker compose --profile https up -d           # + Caddy: HTTPS tự động cho BIZAGENT_DOMAIN
+#   docker compose --profile tunnel up -d          # + Cloudflare Tunnel (không cần mở cổng)
 #
-# Cloudflare Zero Trust > Networks > Tunnels > Public Hostname:
-#   dashboard.nynahouse.com  ->  HTTP  ->  dashboards-web:80
+# Dữ liệu (state DB, kho DuckDB, file xuất Power BI) nằm trong ./workspaces/<ten>/data trên máy chủ.
 
 services:
-  agent:
-    build: .
+  bizagent:
+    build:
+      context: .
+      args:
+        EXTRAS: ${BIZAGENT_EXTRAS:-llm-all,postgres,mysql,telegram,gsheets,excel,mcp}
+        MSSQL: ${BIZAGENT_MSSQL:-0}
+    image: bizagent:local
     env_file: .env
-    restart: unless-stopped
     environment:
-      - TZ=Asia/Ho_Chi_Minh
-      - DASHBOARD_DIR=/data/dashboards
+      BIZAGENT_WORKSPACE: ${BIZAGENT_WORKSPACE:-demo}
+      BIZAGENT_BEHIND_PROXY: "1"
+    user: "${BIZAGENT_UID:-1000}:${BIZAGENT_GID:-1000}"   # trùng chủ sở hữu ./workspaces trên máy chủ
+    ports:
+      - "127.0.0.1:${BIZAGENT_PORT:-8000}:8000"          # chỉ mở trên máy chủ; ra ngoài qua Caddy hoặc Tunnel
+    volumes:
+      - ./workspaces:/app/workspaces
     extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - dashboards:/data/dashboards          # agent ghi file dashboard vào đây
-      # config/ (reports.yaml, users_seed.yaml, thresholds.yaml, targets.yaml...) không nằm trong image.
-      # Mount chỉ đọc: sửa reports.yaml trên máy chủ là service tự nạp lại trong 1 phút, không cần restart.
-      - ./config:/code/config:ro
-    healthcheck:
-      # Cổng 8080 và đường dẫn /api/v1/health khớp với CMD trong Dockerfile và router
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/v1/health', timeout=3)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    mem_limit: 1g
-
-  dashboards-web:
-    image: nginx:1.27-alpine
+      - "host.docker.internal:host-gateway"              # database trên chính máy chủ: DB_HOST=host.docker.internal
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    mem_limit: ${BIZAGENT_MEM_LIMIT:-2g}
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+
+  caddy:
+    profiles: ["https"]
+    image: caddy:2.8-alpine
+    depends_on: [bizagent]
+    environment:
+      BIZAGENT_DOMAIN: ${BIZAGENT_DOMAIN:-}            # bắt buộc khi dùng profile https
+    ports:
+      - "80:80"
+      - "443:443"
     volumes:
-      - dashboards:/usr/share/nginx/html:ro                     # chỉ đọc
-      - ./nginx-dash.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./static:/usr/share/nginx/static:ro                     # chứa chart.umd.min.js
-    security_opt:
-      - no-new-privileges:true
-    mem_limit: 128m
+      - ./deploy/docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
 
   cloudflared:
-    image: cloudflare/cloudflared:${CLOUDFLARED_IMAGE_TAG:-latest}
-    restart: unless-stopped
-    depends_on:
-      - dashboards-web
+    profiles: ["tunnel"]
+    image: cloudflare/cloudflared:${CLOUDFLARED_TAG:-latest}
+    depends_on: [bizagent]
     command: tunnel --no-autoupdate run
     environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}   # bắt buộc khi dùng profile tunnel
+    restart: unless-stopped
 
 volumes:
-  dashboards:
+  caddy_data:
+  caddy_config:

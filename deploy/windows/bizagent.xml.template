@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Mẫu cấu hình WinSW (v2.12). install.ps1 điền {{...}} rồi ghi ra deploy\windows\service\{{SERVICE}}.xml
+  cạnh {{SERVICE}}.exe (WinSW tìm file XML trùng tên với file exe). %BASE% = thư mục service đó.
+  Sửa file đã sinh xong: .\deploy\windows\service\{{SERVICE}}.exe refresh  rồi  Restart-Service {{SERVICE}}
+-->
+<service>
+  <id>{{SERVICE}}</id>
+  <name>{{SERVICE}} (bizagent)</name>
+  <description>bizagent: AI agent phan tich du lieu - web, dashboard, bot Telegram, bao cao dinh ky</description>
+
+  <!-- Chạy python -m bizagent (không qua bizagent.exe) để Ctrl+C khi dừng service tới thẳng tiến trình Python -->
+  <executable>%BASE%\..\..\..\.venv\Scripts\python.exe</executable>
+  <arguments>-m bizagent run -w {{WORKSPACE}} --host {{HOST}} --port {{PORT}}</arguments>
+  <workingdirectory>%BASE%\..\..\..</workingdirectory>
+
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+  <!-- Database chạy CÙNG máy: bỏ comment và sửa tên service (Get-Service postgres*, MSSQL*) -->
+  <!-- <depend>postgresql-x64-17</depend> -->
+
+  <!-- Tài khoản ít quyền; install.ps1 cấp quyền ghi thư mục workspaces\ và logs\ cho tài khoản này -->
+  <serviceaccount>
+    <domain>NT AUTHORITY</domain>
+    <user>LocalService</user>
+  </serviceaccount>
+
+  <env name="PYTHONUTF8" value="1"/>
+  <env name="PYTHONIOENCODING" value="utf-8"/>
+  <env name="PYTHONUNBUFFERED" value="1"/>
+  <env name="PYTHONDONTWRITEBYTECODE" value="1"/>
+
+  <!-- Tiến trình chết thì khởi động lại; healthcheck.ps1 lo trường hợp còn sống nhưng treo -->
+  <onfailure action="restart" delay="10 sec"/>
+  <onfailure action="restart" delay="30 sec"/>
+  <onfailure action="restart" delay="60 sec"/>
+  <resetfailure>1 hour</resetfailure>
+
+  <stopparentprocessfirst>true</stopparentprocessfirst>
+  <stoptimeout>30 sec</stoptimeout>
+
+  <!-- logs\{{SERVICE}}.out.log / .err.log, xoay vòng khi > 10 MB, giữ 8 file -->
+  <logpath>%BASE%\..\..\..\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>
