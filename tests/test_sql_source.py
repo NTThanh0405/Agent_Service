@@ -27,6 +27,26 @@ def test_query_and_masking(sales):
     assert all(row[1] == "***" and row[2] == "***" for row in r.rows)
 
 
+@pytest.mark.parametrize("sql", [
+    "SELECT name, phone AS p FROM customers",                                   # đổi tên cột
+    "SELECT name, phone || '' AS p, lower(email) AS e FROM customers",          # biểu thức
+    "SELECT name FROM customers UNION ALL SELECT phone FROM customers",         # UNION
+    "SELECT c.phone AS x FROM customers c",                                     # alias bảng
+    "WITH t AS (SELECT * FROM customers) SELECT phone AS q FROM t",             # qua CTE
+    "SELECT p FROM (SELECT phone AS p FROM customers) s",                       # qua subquery
+])
+def test_masking_cannot_be_bypassed(sales, sql):
+    real = sales.engine.connect().exec_driver_sql("SELECT phone, email FROM customers").fetchall()
+    secrets_ = {v for row in real for v in row if v}
+    r = sales.query(sql)
+    assert r.rows and not ({v for row in r.rows for v in row} & secrets_)
+
+
+def test_masked_column_cannot_be_probed_in_where(sales):
+    real = sales.engine.connect().exec_driver_sql("SELECT phone FROM customers WHERE phone IS NOT NULL").first()[0]
+    assert sales.query(f"SELECT COUNT(*) FROM customers WHERE phone = '{real}'").rows[0][0] == 0
+
+
 def test_truncation(sales):
     r = sales.query("SELECT id FROM orders")
     assert r.truncated and len(r.rows) == sales.max_rows

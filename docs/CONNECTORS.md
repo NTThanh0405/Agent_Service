@@ -203,7 +203,7 @@ jobs:
 - Đồng bộ dùng cùng lớp bảo vệ: SQL qua guard, cột trong `mask_columns` bị che **trước khi** ghi vào kho.
 - Mỗi kết quả agent đọc từ kho kèm "Dữ liệu kho đồng bộ lúc ..." để câu trả lời nói rõ độ mới của dữ liệu.
 - Lệnh: `bizagent sync` (chạy mọi job), `bizagent sync <job>`, `bizagent sync --due`, `bizagent sync --status`.
-  Trạng thái cũng có ở `GET /api/v1/health`.
+  Trạng thái cũng có ở `GET /api/v1/health` (cần quyền quản trị hoặc API token).
 - DuckDB chỉ cho một tiến trình ghi: khi server đang chạy (và `run_in_server: true`), để server tự đồng bộ.
 
 ---

@@ -25,7 +25,7 @@ from typing import Any
 import duckdb
 
 from bizagent.security.guard import check_select
-from bizagent.security.masking import mask_rows
+from bizagent.security.masking import MaskingError, mask_query, mask_rows
 from bizagent.sources.base import DataSource, QueryResult, SourceError, TableInfo
 from bizagent.tabular import SAFE_DUCKDB_CONFIG, create_table, quote_ident, slugify
 
@@ -138,6 +138,17 @@ class WarehouseSource(DataSource):
     def _run(self, sql: str, tables: tuple[str, ...], limit: int) -> QueryResult:
         try:
             with self._connect() as con:
+                if self.mask_columns:
+                    def columns_of(schema: str | None, table: str) -> list[str]:
+                        return [r[0] for r in con.execute(
+                            "SELECT column_name FROM information_schema.columns WHERE table_schema = ? "
+                            "AND table_name = ? ORDER BY ordinal_position", [schema or "main", table]).fetchall()]
+
+                    try:
+                        sql = mask_query(sql, dialect="duckdb", patterns=self.mask_columns, columns_of=columns_of,
+                                         default_schema="main")
+                    except MaskingError as e:
+                        raise SourceError(str(e)) from e
                 res = con.execute(sql)
                 columns = [d[0] for d in res.description]
                 rows = res.fetchmany(limit + 1)

@@ -114,7 +114,7 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
 Start-Sleep -Seconds 8
 try {
     $h = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/v1/health" -TimeoutSec 10
-    Step "Đang chạy: workspace $($h.workspace), model $($h.model). Mở http://127.0.0.1:$Port"
+    Step "Đang chạy: bizagent $($h.version), workspace $Workspace. Mở http://127.0.0.1:$Port (chi tiết: bizagent check)"
 } catch {
     Write-Host "Service chưa trả lời. Xem log: Get-Content $Root\logs\$ServiceName.err.log -Tail 50" -ForegroundColor Yellow
 }

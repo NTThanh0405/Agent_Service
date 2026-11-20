@@ -30,7 +30,7 @@ from bizagent.agent.service import AgentService
 from bizagent.dashboards.engine import AccessDenied, DashboardError
 from bizagent.dashboards.powerbi import column_types, dataset_params, m_code, to_csv, to_json
 from bizagent.sources.base import SourceError
-from bizagent.webauth import SESSION_COOKIE, SESSION_DAYS, Principal, WebAuth
+from bizagent.webauth import PROXY_HEADERS, SESSION_COOKIE, SESSION_DAYS, Principal, WebAuth
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 DASH_CSP = ("default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; "
@@ -58,7 +58,7 @@ def _page(title: str, body: str) -> str:
 
 
 def create_app(service: AgentService) -> FastAPI:
-    auth = WebAuth(service.ws)
+    auth = WebAuth(service.ws, service.store)
     if auth.api_role not in service.ws.info.roles:
         raise RuntimeError(f"BIZAGENT_API_ROLE='{auth.api_role}' không có trong roles của workspace")
     catalog = service.catalog
@@ -101,6 +101,7 @@ def create_app(service: AgentService) -> FastAPI:
             cookie=request.cookies.get(SESSION_COOKIE),
             authorization=request.headers.get("authorization", ""),
             client_host=request.client.host if request.client else None,
+            forwarded=any(h in request.headers for h in PROXY_HEADERS),
         )
 
     def require_api(request: Request) -> Principal:
@@ -131,9 +132,15 @@ def create_app(service: AgentService) -> FastAPI:
 
     # ------------------------------------------------------------------ chung
     @app.get("/api/v1/health")
-    def health() -> dict:
+    def health(request: Request) -> dict:
+        # Không đăng nhập (healthcheck của Docker/Windows): chỉ báo còn sống. Chi tiết nguồn, lỗi kết nối, model...
+        # chỉ cho role quản trị, vì thông báo lỗi có thể lộ địa chỉ máy chủ database / cấu hình nội bộ.
+        p = principal(request)
+        if p is None or p.role not in service.ws.info.admin_roles:
+            return {"status": "ok", "version": __version__}
         return {
             "status": "ok",
+            "version": __version__,
             "workspace": service.ws.name,
             "model": service.model_ref.label,
             "sources": sorted(service.registry.sources),
@@ -157,7 +164,8 @@ def create_app(service: AgentService) -> FastAPI:
     # ------------------------------------------------------------------ đăng nhập
     @app.get("/login", response_class=HTMLResponse)
     def login_page(next: str = "/dashboards", error: str = "") -> str:
-        msg = '<p class="err">Sai tên hoặc mật khẩu</p>' if error else ""
+        msg = {"1": '<p class="err">Sai tên hoặc mật khẩu</p>',
+               "locked": '<p class="err">Sai mật khẩu quá nhiều lần, hãy thử lại sau 15 phút</p>'}.get(error, "")
         hint = ("<p class='note'>Người dùng Telegram: gõ <b>/login</b> với bot để nhận link đăng nhập.</p>")
         body = f"""<section class="card" style="max-width:380px">{msg}
 <form method="post" action="/login"><input type="hidden" name="next" value="{html.escape(next)}">
@@ -180,9 +188,12 @@ def create_app(service: AgentService) -> FastAPI:
     async def login(request: Request):
         form = {k: v[0] for k, v in parse_qs((await request.body()).decode(), keep_blank_values=True).items()}
         nxt = _safe_next(form.get("next", "/dashboards"))
-        p = await asyncio.to_thread(auth.check_password, form.get("username", ""), form.get("password", ""))
+        username = form.get("username", "")
+        host = request.client.host if request.client else None
+        p = await asyncio.to_thread(auth.check_password, username, form.get("password", ""), host)
         if p is None:
-            return RedirectResponse(f"/login?error=1&next={quote(nxt)}", 303)
+            err = "locked" if auth.login_blocked(username, host) else "1"
+            return RedirectResponse(f"/login?error={err}&next={quote(nxt)}", 303)
         return _with_session(RedirectResponse(nxt, 303), p.user_id)
 
     @app.get("/login/link")
@@ -197,7 +208,11 @@ def create_app(service: AgentService) -> FastAPI:
         return resp
 
     @app.get("/logout")
-    def logout():
+    async def logout(request: Request):
+        cookie = request.cookies.get(SESSION_COOKIE)
+        body = auth.signer.verify(cookie) if cookie else None
+        if body and body.get("k") == "session":
+            await asyncio.to_thread(auth.revoke_sessions, body["u"])    # cookie bị chép ở nơi khác cũng hết hiệu lực
         resp = RedirectResponse("/login", 303)
         resp.delete_cookie(SESSION_COOKIE)
         return resp
