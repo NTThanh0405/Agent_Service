@@ -61,7 +61,26 @@ FORBIDDEN_FUNCTIONS = {
     "query", "query_table",
     # Oracle
     "dbms_lock", "utl_file", "utl_http",
+    # MySQL UDF hay bị cài để chạy lệnh hệ thống
+    "sys_exec", "sys_eval",
 }
+
+# Danh sách tên đơn lẻ luôn sót (vd pg_sleep_for, lo_get...): chặn thêm theo tiền tố. Hàm quản trị/hệ thống của các
+# database gần như đều mang các tiền tố này, còn hàm phân tích dữ liệu thông thường thì không.
+FORBIDDEN_FUNCTION_PREFIXES = (
+    "pg_",          # PostgreSQL: pg_sleep_for, pg_sleep_until, pg_read_server_files, pg_ls_waldir...
+    "lo_",          # PostgreSQL large object: lo_get, lo_open...
+    "dblink",       # PostgreSQL dblink_*
+    "xp_", "sp_",   # SQL Server extended / system procedure
+    "utl_", "dbms_",  # Oracle package
+    "read_",        # DuckDB read_* (đọc file)
+)
+# Gói Oracle gọi dạng goi.ham(...) (vd UTL_HTTP.REQUEST): chặn mọi định danh mang tiền tố này
+FORBIDDEN_IDENTIFIER_PREFIXES = ("utl_", "dbms_")
+
+
+def _forbidden_function(name: str) -> bool:
+    return name in FORBIDDEN_FUNCTIONS or name.startswith(FORBIDDEN_FUNCTION_PREFIXES)
 
 
 class UnsafeSQLError(ValueError):
@@ -81,6 +100,29 @@ def to_sqlglot_dialect(sqlalchemy_dialect: str) -> str:
 def _table_allowed(full_name: str, allowed: list[str]) -> bool:
     name = full_name.lower()
     return any(fnmatchcase(name, p.lower()) for p in allowed)
+
+
+def _cte_references(tree: exp.Expression) -> set[int]:
+    """id() của các nút Table thực sự trỏ tới một CTE (theo phạm vi của sqlglot).
+
+    Không được so tên đơn thuần: `WITH bi_mat AS (SELECT * FROM bi_mat) SELECT * FROM bi_mat` — `bi_mat` bên trong
+    là BẢNG THẬT (CTE không đệ quy không tự tham chiếu), nếu coi là CTE thì vượt qua allowlist.
+    Nút Table nào không xác định được là CTE thì bị coi là bảng thật và phải qua allowlist (an toàn khi nghi ngờ).
+    """
+    from sqlglot.optimizer.scope import traverse_scope
+
+    try:
+        scopes = traverse_scope(tree)
+    except Exception as e:  # phân tích phạm vi lỗi: không đoán, từ chối
+        raise UnsafeSQLError(f"Không phân tích được phạm vi bảng trong câu SQL: {str(e).splitlines()[0]}") from e
+    cte_names = {c.alias_or_name.lower() for c in tree.find_all(exp.CTE)}
+    refs: set[int] = set()
+    for scope in scopes:
+        for table in scope.tables:
+            src = scope.sources.get(table.alias_or_name)
+            if src is not None and not isinstance(src, exp.Table) and table.name.lower() in cte_names:
+                refs.add(id(table))
+    return refs
 
 
 def check_select(
@@ -110,10 +152,12 @@ def check_select(
             raise UnsafeSQLError("Không được dùng SELECT ... INTO")
         if isinstance(node, exp.Func):
             fname = (node.name if isinstance(node, exp.Anonymous) else node.sql_name()).lower()
-            if fname in FORBIDDEN_FUNCTIONS:
+            if _forbidden_function(fname):
                 raise UnsafeSQLError(f"Không được gọi hàm {fname}")
+        if isinstance(node, exp.Identifier) and node.name.lower().startswith(FORBIDDEN_IDENTIFIER_PREFIXES):
+            raise UnsafeSQLError(f"Không được dùng {node.name}")
 
-    cte_names = {cte.alias_or_name.lower() for cte in tree.find_all(exp.CTE)}
+    cte_refs = _cte_references(tree)
     used: list[str] = []
     for table in tree.find_all(exp.Table):
         if not isinstance(table.this, exp.Identifier):
@@ -125,7 +169,7 @@ def check_select(
         # DuckDB đọc file khi tên bảng trông như đường dẫn ("data.parquet", 'x/y.csv') -> chặn
         if any(ch in part for part in (name, schema or "") for ch in "./\\:"):
             raise UnsafeSQLError(f"Tên bảng không hợp lệ: {table.sql(dialect=dialect)}")
-        if not schema and name.lower() in cte_names:
+        if id(table) in cte_refs:
             continue
         schema = schema or default_schema
         full = f"{schema}.{name}" if schema else name

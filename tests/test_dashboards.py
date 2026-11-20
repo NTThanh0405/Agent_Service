@@ -131,6 +131,50 @@ def test_authenticate_paths(demo_ws, monkeypatch):
     assert a.authenticate(cookie=cookie, authorization="", client_host="10.0.0.5") is None
 
 
+def test_login_limiter_one_time_link_and_logout(demo_ws, monkeypatch, tmp_path):
+    from bizagent.state import StateStore
+    from bizagent.webauth import LoginLimiter
+
+    monkeypatch.setenv("BIZAGENT_SECRET_KEY", "secret")
+    demo_ws.users.append(UserEntry(id="web:lan", role="manager", password_hash=hash_password("matkhau123")))
+    store = StateStore(f"sqlite:///{(tmp_path / 's.db').as_posix()}")
+    a = WebAuth(demo_ws, store, limiter=LoginLimiter(max_failures=3, window=900))
+    for _ in range(3):
+        assert a.check_password("lan", "sai", "1.2.3.4") is None
+    assert a.login_blocked("lan", "1.2.3.4")
+    assert a.check_password("lan", "matkhau123", "5.6.7.8") is None             # khoá theo tên: đúng mật khẩu vẫn chờ
+    assert a.login_blocked("khac", "1.2.3.4")                                    # khoá theo IP: đổi tên cũng không được
+
+    link = a.login_link_token("web:lan")
+    assert a.exchange_link(link)
+    assert a.exchange_link(link) is None                                         # link chỉ dùng một lần
+    assert WebAuth(demo_ws, store).exchange_link(link) is None                   # kể cả sau khi khởi động lại
+
+    cookie = a.session_token("web:lan")
+    kw = {"authorization": "", "client_host": "10.0.0.5"}
+    assert a.authenticate(cookie=cookie, **kw).user_id == "web:lan"
+    a.revoke_sessions("web:lan")                                                 # đăng xuất
+    assert a.authenticate(cookie=cookie, **kw) is None
+    assert a.authenticate(cookie=a.session_token("web:lan"), **kw)               # đăng nhập lại thì được
+    store.close()
+
+
+def test_local_mode_refuses_forwarded_requests(demo_ws, monkeypatch):
+    monkeypatch.delenv("BIZAGENT_API_TOKEN", raising=False)
+    a = WebAuth(demo_ws)
+    assert a.local_mode()
+    assert a.authenticate(cookie=None, authorization="", client_host="127.0.0.1").user_id == "local"
+    # cloudflared / IIS / nginx cùng máy: IP là 127.0.0.1 nhưng có header chuyển tiếp -> không phải máy cá nhân
+    assert a.authenticate(cookie=None, authorization="", client_host="127.0.0.1", forwarded=True) is None
+
+
+def test_bot_login_link_works_without_secret_key(demo_ws, monkeypatch):
+    monkeypatch.delenv("BIZAGENT_SECRET_KEY", raising=False)
+    demo_ws.users.append(UserEntry(id="telegram:1", role="manager"))
+    link = WebAuth(demo_ws).login_link_token("telegram:1")                       # bot tạo link
+    assert WebAuth(demo_ws).exchange_link(link)                                  # web server (WebAuth khác) nhận được
+
+
 # ----------------------------------------------------------------------------- web
 @pytest.fixture
 def client(env, fake_model_cls, monkeypatch):

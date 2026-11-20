@@ -293,7 +293,9 @@ Trước khi đưa ra Internet:
 - [ ] Bật `reviewer` trong `agents.yaml` để gắn cờ con số không đối chiếu được với dữ liệu.
 
 Code còn có: kiểm tra chỉ-SELECT theo từng loại database, phiên DB chỉ-đọc, timeout và giới hạn dòng, phân quyền
-role → nguồn kiểm tra ở server, audit mọi truy vấn.
+role → nguồn kiểm tra ở server, audit mọi truy vấn. `mask_columns` được che ngay trong câu SQL (đổi tên cột, viết
+biểu thức hay UNION đều chỉ thấy `***`). Đăng nhập sai 10 lần trong 15 phút thì tạm khoá; link `/login` dùng một
+lần; đăng xuất thu hồi mọi phiên của người đó. `/api/v1/health` không đăng nhập chỉ trả `{"status": "ok"}`.
 
 ---
 

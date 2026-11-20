@@ -26,7 +26,7 @@ def login_message(service: AgentService, user_id: str, role: str) -> str:
         return "Chưa cấu hình địa chỉ dashboard (dashboards.yaml: public_url)."
     from bizagent.webauth import LINK_HOURS, WebAuth
 
-    token = WebAuth(service.ws).login_link_token(user_id)
+    token = WebAuth(service.ws, service.store).login_link_token(user_id)
     url = f"{cat.config.public_url.rstrip('/')}/login/link?t={token}"
     names = ", ".join(cat.dashboards[s].title for s in cat.visible(role, user_id)) or "(chưa có)"
     return (f"Link đăng nhập dashboard (dùng trong {LINK_HOURS} giờ, không chia sẻ cho người khác):\n{url}\n\n"

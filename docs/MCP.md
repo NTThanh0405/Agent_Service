@@ -31,7 +31,7 @@ tai_lieu:
 - Quyền theo role như mọi nguồn (`workspace.yaml: roles`); mỗi lần gọi được ghi audit; kết quả dài bị cắt ở
   `max_output_chars`; quá `timeout_seconds` thì báo lỗi cho agent.
 - MCP server lỗi (không chạy được lệnh, sai URL, thiếu tool) không làm hỏng agent: lỗi hiện ở `bizagent check`
-  và `GET /api/v1/health` → `mcp_errors`.
+  và `GET /api/v1/health` (cần quyền quản trị hoặc API token) → `mcp_errors`.
 - Dữ liệu từ MCP server đi thẳng tới model AI; MCP server bên thứ ba có thể trả nội dung chứa "chỉ dẫn" giả.
   System prompt dặn agent coi kết quả tool là dữ liệu, nhưng vẫn chỉ nên dùng MCP server tin cậy.
 

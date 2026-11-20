@@ -43,6 +43,19 @@ def test_warehouse_is_read_only_for_agent(runner):
             runner.warehouse.query(bad)
 
 
+def test_warehouse_masking_cannot_be_bypassed(tmp_path):
+    from bizagent.sources.warehouse import WarehouseSource
+
+    wh = WarehouseSource("kho", {"path": str(tmp_path / "w.duckdb"), "mask_columns": ["phone"]})
+    wh.write_table("kh", ["ten", "phone"], [("A", "0901234567"), ("B", None)])
+    for sql in ("SELECT ten, phone AS p FROM kh", "SELECT phone || '' AS z FROM kh",
+                "SELECT ten FROM kh UNION SELECT phone FROM kh", "SELECT * FROM kh"):
+        values = {v for row in wh.query(sql).rows for v in row}
+        assert "0901234567" not in values and ("***" in values)
+    assert wh.query("SELECT COUNT(*) FROM kh WHERE phone LIKE '09%'").rows == [(0,)]
+    assert wh.query("SELECT COUNT(phone) FROM kh").rows == [(1,)]            # NULL vẫn là NULL
+
+
 def test_upsert_append_and_schema_check(runner):
     wh = runner.warehouse
     wh.write_table("t", ["id", "v"], [(1, "a"), (2, "b")])

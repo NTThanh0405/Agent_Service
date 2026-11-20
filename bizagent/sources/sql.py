@@ -28,7 +28,7 @@ from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import SQLAlchemyError
 
 from bizagent.security.guard import check_select, to_sqlglot_dialect
-from bizagent.security.masking import mask_rows
+from bizagent.security.masking import MaskingError, mask_query, mask_rows
 from bizagent.sources.base import DataSource, QueryResult, SourceError, TableInfo
 
 log = logging.getLogger(__name__)
@@ -48,6 +48,7 @@ class SqlSource(DataSource):
         self.max_rows = int(config.get("max_rows", 200))
         self.timeout_seconds = int(config.get("timeout_seconds", 15))
         self.mask_columns: list[str] = list(config.get("mask_columns") or [])
+        self._columns_cache: dict[tuple[str, str], list[str]] = {}
         self.engine = self._make_engine(url)
         self._sa_dialect = self.engine.dialect.name
         self.default_schema: str | None = config.get("default_schema") or self._fallback_schema()
@@ -168,12 +169,30 @@ class SqlSource(DataSource):
         )
         return self._execute(checked, limit)
 
+    def _table_columns(self, schema: str | None, table: str) -> list[str]:
+        """Cột của bảng (theo thứ tự trong DB), có cache: dùng để che cột ngay trong câu SQL."""
+        key = (schema or "", table.lower())
+        if key not in self._columns_cache:
+            try:
+                cols = [c["name"] for c in inspect(self.engine).get_columns(table, schema=schema)]
+            except SQLAlchemyError as e:
+                raise SourceError(f"Không đọc được cấu trúc bảng {table}: {e}") from e
+            self._columns_cache[key] = cols
+        return self._columns_cache[key]
+
     def _execute(self, checked, limit: int) -> QueryResult:
+        sql = checked.sql
+        if self.mask_columns:
+            try:
+                sql = mask_query(sql, dialect=self.dialect, patterns=self.mask_columns,
+                                 columns_of=self._table_columns, default_schema=self.default_schema)
+            except MaskingError as e:
+                raise SourceError(str(e)) from e
         try:
             with self.engine.connect() as conn:
                 try:
                     # exec_driver_sql: không diễn giải ":ten" như text() (chuỗi '10:30' vẫn đúng)
-                    res = conn.exec_driver_sql(checked.sql)
+                    res = conn.exec_driver_sql(sql)
                     columns = list(res.keys())
                     rows = [tuple(r) for r in res.fetchmany(limit + 1)]
                 finally:

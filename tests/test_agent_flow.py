@@ -2,6 +2,7 @@
 
 from langchain_core.messages import AIMessage, ToolMessage
 
+from bizagent import __version__
 from bizagent.agent.service import AgentService
 
 
@@ -69,7 +70,8 @@ def test_rest_api(demo_ws, fake_model_cls, monkeypatch):
     svc = AgentService(demo_ws, model=fake_model_cls(responses=[AIMessage(content="Xin chào")], seen=[]))
     client = TestClient(create_app(svc))
     with client:                                  # chạy lifespan: tác vụ nền, mở/đóng kết nối lưu phiên
-        health = client.get("/api/v1/health").json()
+        assert client.get("/api/v1/health").json() == {"status": "ok", "version": __version__}   # không lộ chi tiết
+        health = client.get("/api/v1/health", headers={"Authorization": "Bearer s3cret"}).json()
         assert health["sources"] == ["ke_hoach", "sales", "warehouse"]
         assert health["source_errors"] == {} and health["channels"]["zalo"] == {"enabled": False}
         assert client.post("/api/v1/chat", json={"message": "hi"}).status_code == 401
