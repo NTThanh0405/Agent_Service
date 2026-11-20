@@ -6,6 +6,7 @@ Cách 1 — Web connector (khuyên dùng, Power BI Service làm mới theo lịc
     Trang https://<public_url>/powerbi có sẵn mã Power Query (M) đã đặt kiểu cột cho từng dataset.
 Cách 2 — Xuất file theo lịch (dashboards.yaml: powerbi.export): Parquet/CSV trong data/powerbi/, Power BI đọc
     bằng connector Folder/Parquet (qua On-premises data gateway nếu dùng Power BI Service).
+Cách 3 — Tự đẩy lên Power BI Service (dashboards.yaml: powerbi.push): xem bizagent/dashboards/powerbi_push.py.
 """
 
 from __future__ import annotations
@@ -34,6 +35,14 @@ PQ_TYPES = {
     "BIGINT": "Int64.Type", "DOUBLE": "type number", "BOOLEAN": "type logical", "DATE": "type date",
     "TIMESTAMP": "type datetime", "TIME": "type time", "VARCHAR": "type text",
 }
+
+
+def parse_every(text: str, field: str) -> timedelta:
+    """'30m' / '1h' / '1d' -> timedelta."""
+    m = _EVERY.match(text.strip())
+    if not m or int(m[1]) <= 0:
+        raise DashboardError(f"{field} có dạng 30m, 1h, 1d")
+    return timedelta(**{{"m": "minutes", "h": "hours", "d": "days"}[m[2]]: int(m[1])})
 
 
 def dataset_params(engine: DashboardEngine, name: str, query: dict[str, str]) -> dict[str, Any]:
@@ -97,10 +106,7 @@ class PowerBIExporter:
         if cfg is None:
             raise DashboardError("dashboards.yaml chưa có powerbi.export")
         self.cfg = cfg
-        m = _EVERY.match(cfg.every)
-        if not m:
-            raise DashboardError("powerbi.export.every có dạng 30m, 1h, 1d")
-        self.interval = timedelta(**{{"m": "minutes", "h": "hours", "d": "days"}[m[2]]: int(m[1])})
+        self.interval = parse_every(cfg.every, "powerbi.export.every")
         self.dir = (engine.ws.path / cfg.dir).resolve()
         self.last_run: datetime | None = None
         self.last_result: dict[str, str] = {}

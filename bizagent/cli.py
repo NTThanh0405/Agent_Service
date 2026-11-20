@@ -15,6 +15,7 @@
     bizagent alert [ten] [-w ten] [--to id] [--preview] [--force]  danh sách / kiểm tra ngay cảnh báo theo ngưỡng
     bizagent hash-password <ten>   tạo mật khẩu cho tài khoản web
     bizagent powerbi-export [-w ten]           xuất file Parquet/CSV cho Power BI ngay
+    bizagent powerbi-push [-w ten] [--check]   đẩy dữ liệu lên Power BI Service ngay (powerbi.push)
     bizagent telegram [-w ten]     bot Telegram
 
 Workspace: -w <ten hoặc đường dẫn>, hoặc biến BIZAGENT_WORKSPACE, mặc định "demo".
@@ -138,6 +139,8 @@ def cmd_check(args) -> int:
         for slug, err in cat.errors.items():
             print(f"Dashboard {slug}: LỖI: {err}")
             ok = False
+        if cat.config.powerbi.enabled and cat.config.powerbi.push:
+            ok &= _check_powerbi_push(ws, reg, cat)
     except Exception as e:
         print(f"Dashboard: LỖI cấu hình: {e}")
         ok = False
@@ -216,6 +219,33 @@ def cmd_check(args) -> int:
         ok = False
     print("=> Tất cả OK" if ok else "=> Còn lỗi, xem các dòng trên")
     return 0 if ok else 1
+
+
+def _check_powerbi_push(ws, reg, cat) -> bool:
+    from bizagent.dashboards.engine import DashboardEngine
+    from bizagent.dashboards.powerbi_push import PowerBIPusher, missing_env
+
+    push = cat.config.powerbi.push
+    names = cat.powerbi_push_datasets()
+    head = f"Power BI push ({push.mode}, mỗi {push.every}, {len(names)} dataset)"
+    missing = missing_env()
+    if missing:
+        print(f"{head}: thiếu {', '.join(missing)} trong .env")
+        return False
+    if not names:
+        print(f"{head}: LỖI: chưa có dataset nào (powerbi.push.datasets hoặc powerbi.datasets)")
+        return False
+    try:
+        pusher = PowerBIPusher(DashboardEngine(reg, cat))
+        try:
+            status = pusher.check()
+        finally:
+            pusher.close()
+    except Exception as e:
+        print(f"{head}: LỖI: {e}")
+        return False
+    print(f"{head}: kết nối workspace {push.workspace_id} OK, {status}")
+    return True
 
 
 def cmd_prompt(args) -> int:
@@ -318,7 +348,8 @@ def cmd_serve(args) -> int:
 
 def cmd_run(args) -> int:
     """Một tiến trình cho tất cả: web (dashboard, Power BI, /admin, API, webhook Zalo/Slack) + bot Telegram
-    (nếu có TELEGRAM_BOT_TOKEN) + tác vụ nền (đồng bộ, báo cáo, xuất Power BI). Dùng cho Windows Service và Docker."""
+    (nếu có TELEGRAM_BOT_TOKEN) + tác vụ nền (đồng bộ, báo cáo, cảnh báo, xuất/đẩy Power BI).
+    Dùng cho Windows Service và Docker."""
     args.with_telegram = bool(os.environ.get("TELEGRAM_BOT_TOKEN")) and not args.no_telegram
     if args.with_telegram:
         try:
@@ -407,6 +438,39 @@ def cmd_powerbi_export(args) -> int:
             print(f"{name}: {status}")
         print(f"Thư mục: {exporter.dir}")
         return 0 if all(s.startswith("ok") for s in results.values()) else 1
+    finally:
+        reg.close()
+
+
+def cmd_powerbi_push(args) -> int:
+    from bizagent.dashboards.config import DashboardCatalog
+    from bizagent.dashboards.engine import DashboardEngine
+    from bizagent.dashboards.powerbi_push import PowerBIPusher
+    from bizagent.sources.registry import SourceRegistry
+    from bizagent.workspace import load_workspace
+
+    ws = load_workspace(args.workspace)
+    reg = SourceRegistry(ws)
+    try:
+        cat = DashboardCatalog(ws)
+        if not cat.config.powerbi.enabled or cat.config.powerbi.push is None:
+            print("Chưa bật: cần powerbi.enabled: true và powerbi.push trong dashboards.yaml (xem docs/DASHBOARDS.md)")
+            return 1
+        pusher = PowerBIPusher(DashboardEngine(reg, cat))
+        try:
+            if args.check:
+                print(f"Power BI: {pusher.check()}")
+                return 0
+            results = pusher.push_all()
+        finally:
+            pusher.close()
+        for name, status in results.items():
+            print(f"{name}: {status}")
+        print(f"Model: {pusher.model} · workspace {pusher.cfg.workspace_id}")
+        return 0 if results and all(s.startswith("ok") for s in results.values()) else 1
+    except Exception as e:
+        print(f"Lỗi: {e}")
+        return 1
     finally:
         reg.close()
 
@@ -614,6 +678,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("powerbi-export", help="xuất file Parquet/CSV cho Power BI ngay")
     ws_arg(sp)
     sp.set_defaults(func=cmd_powerbi_export)
+
+    sp = sub.add_parser("powerbi-push", help="đẩy dữ liệu lên Power BI Service ngay (powerbi.push)")
+    ws_arg(sp)
+    sp.add_argument("--check", action="store_true", help="chỉ kiểm tra token và quyền vào workspace, không đẩy")
+    sp.set_defaults(func=cmd_powerbi_push)
 
     sp = sub.add_parser("mcp-server", help="mở dữ liệu workspace thành MCP server (stdio) cho Claude Desktop...")
     ws_arg(sp)

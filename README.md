@@ -48,7 +48,7 @@ Mục lục: [Dùng cho ai](#dùng-cho-ai-chọn-cách-triển-khai) · [Tính n
 | **Model AI** | Claude, ChatGPT, Gemini, DeepSeek, Ollama (chạy trên máy), mọi API tương thích OpenAI — đổi bằng một dòng |
 | **Tuỳ chỉnh theo doanh nghiệp** | Mỗi doanh nghiệp một thư mục *workspace*: prompt (Jinja2), định nghĩa chỉ số, SQL mẫu, phân quyền |
 | **Kênh** | Telegram, Zalo OA, Slack, terminal, Claude Desktop/Cursor (MCP), REST API cho phần mềm khác · báo cáo định kỳ qua cả email · web dành cho dashboard, Power BI, `/admin` |
-| **Dashboard** | Dashboard sống viết bằng YAML/SQL/JS, tự làm mới, không hết hạn, agent tạo được bằng lời · hoặc đưa dữ liệu sang **Power BI** |
+| **Dashboard** | Dashboard sống viết bằng YAML/SQL/JS, tự làm mới, không hết hạn, agent tạo được bằng lời · hoặc đưa dữ liệu sang **Power BI** (Power BI kéo qua web connector/file, hoặc bizagent tự đẩy lên Power BI Service theo lịch) |
 | **Vận hành** | Báo cáo định kỳ · cảnh báo theo ngưỡng (doanh thu giảm, tồn kho thấp…) gửi ngay qua Telegram/Zalo/Slack/email · trang quản trị `/admin` · cấp quyền theo người có hạn dùng · audit log · phiên chat lưu DB |
 | **An toàn** | Chỉ cho `SELECT` (kiểm tra theo từng loại database) · phiên DB chỉ-đọc · che cột cá nhân · reviewer đối chiếu mọi con số trong câu trả lời với dữ liệu |
 
@@ -73,7 +73,8 @@ Mọi kênh (Telegram, Zalo, Slack, terminal, REST API) đi qua một điểm v�
 8. **Reviewer** đối chiếu con số trong câu trả lời với dữ liệu vừa truy vấn; lưu lịch sử, mức dùng, audit; trả lời về kênh.
 
 Chạy nền trong cùng tiến trình (`bizagent run`): **đồng bộ** nguồn → kho DuckDB (`sync.yaml`), **báo cáo định kỳ**
-(`reports.yaml`, kiểm tra lịch mỗi phút), **cảnh báo theo ngưỡng** (`alerts.yaml`), **xuất Power BI** (`powerbi.export`), **dọn** phiên chat/audit cũ mỗi giờ.
+(`reports.yaml`, kiểm tra lịch mỗi phút), **cảnh báo theo ngưỡng** (`alerts.yaml`), **xuất Power BI** (`powerbi.export`),
+**tự đẩy dữ liệu lên Power BI Service** (`powerbi.push`), **dọn** phiên chat/audit cũ mỗi giờ.
 
 ---
 
@@ -394,13 +395,14 @@ lần; đăng xuất thu hồi mọi phiên của người đó. `/api/v1/health
 | `bizagent serve` | Chỉ web (dashboard, Power BI, `/admin`, REST API, webhook Zalo/Slack) |
 | `bizagent telegram` | Chỉ bot Telegram |
 | `bizagent chat` | Chat trong terminal |
-| `bizagent check` | Kiểm tra model, nguồn dữ liệu, đồng bộ, dashboard, kênh |
+| `bizagent check` | Kiểm tra model, nguồn dữ liệu, đồng bộ, dashboard, Power BI push, kênh |
 | `bizagent init <ten>` | Tạo workspace từ mẫu |
 | `bizagent prompt` | In system prompt đã ghép (`--agent advisor`: prompt từng agent khi bật nhiều agent) |
 | `bizagent sync [job] [--status]` | Đồng bộ dữ liệu về kho |
 | `bizagent report <ten> [--preview] [--to id]` | Xem trước / gửi ngay báo cáo |
 | `bizagent alert [ten] [--preview] [--to id]` | Danh sách / kiểm tra ngay cảnh báo theo ngưỡng |
 | `bizagent powerbi-export` | Xuất file Parquet/CSV cho Power BI |
+| `bizagent powerbi-push [--check]` | Đẩy dữ liệu lên Power BI Service ngay (service principal, `powerbi.push`) |
 | `bizagent audit [--user id]` | Xem audit log |
 | `bizagent usage [--user id\|all] [--days 30]` | Báo cáo mức dùng token (chỉ khi cần xem; trong chat gõ `/token`) |
 | `bizagent hash-password <ten>` | Tạo mật khẩu tài khoản web |
@@ -485,6 +487,7 @@ Test không gọi model AI thật và không cần mạng. CI (GitHub Actions) c
 - [x] Nhiều agent chuyên trách (router, analyst, advisor đánh giá + đề xuất, designer), model riêng từng agent,
       token theo từng agent
 - [x] Cảnh báo theo ngưỡng (vd doanh thu giảm > 20%, tồn kho dưới mức) gửi ngay qua chat/email
+- [x] Tự đẩy dữ liệu lên Power BI Service theo lịch (push semantic model, service principal)
 - [ ] Xuất file từ chat (Excel/CSV), ảnh biểu đồ trên Telegram/Zalo · báo cáo PDF / Excel đính kèm email
 - [ ] Đánh giá câu trả lời 👍/👎 ngay trong Telegram/Zalo để cải thiện knowledge
 - [ ] Trình cấu hình nguồn dữ liệu trên `/admin` (không phải sửa YAML)

@@ -9,4 +9,5 @@ powerbi:                             # 2. Đưa dataset sang Power BI: /powerbi
   enabled: false
   datasets: []                       # tên dataset trong datasets.yaml
   # export: {every: 1h, formats: [parquet, csv]}
+  # push: {every: 1h, workspace_id: "<GUID workspace Power BI>", mode: replace}   # tự đẩy lên Power BI Service
   reports: {}
