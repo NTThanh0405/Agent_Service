@@ -9,13 +9,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false            # một bản Python lỗi vẫn chạy hết các bản còn lại, để thấy lỗi ở đâu
       matrix:
         python: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
-      - run: pip install -e ".[dev,anthropic,telegram,excel]"
+      - run: pip install -e ".[dev,anthropic,telegram,excel,mcp]"
       - run: ruff check bizagent tests
-      - run: pytest -q
+      - run: pytest -q -rfE

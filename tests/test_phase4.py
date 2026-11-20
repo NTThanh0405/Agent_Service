@@ -97,6 +97,8 @@ FAKE_MCP = textwrap.dedent('''
 
 
 async def test_mcp_source_tools(demo_ws, fake_model_cls, tmp_path):
+    pytest.importorskip("mcp")                        # cần pip install "bizagent[mcp]"
+    pytest.importorskip("langchain_mcp_adapters")
     script = tmp_path / "fake_mcp.py"
     script.write_text(FAKE_MCP, encoding="utf-8")
     demo_ws.sources["crm"] = SourceConfig(type="mcp", description="CRM", transport="stdio",
@@ -162,6 +164,7 @@ def test_mcp_server_tools(demo_ws):
 
 
 async def test_mcp_server_registers_tools(demo_ws):
+    pytest.importorskip("mcp")                        # cần pip install "bizagent[mcp]"
     from bizagent.mcp_server import build_server
 
     mcp, t = build_server(demo_ws, "manager")

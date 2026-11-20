@@ -186,7 +186,9 @@ class WebAuth:
                      forwarded: bool = False) -> Principal | None:
         if cookie:
             body = self.signer.verify(cookie)
-            if body and body.get("k") == "session" and body.get("iat", 0) >= self._sessions_valid_after(body["u"]):
+            after = self._sessions_valid_after(body["u"]) if body else 0.0
+            # chưa từng đăng xuất (after == 0): mọi phiên còn hạn đều hợp lệ, kể cả phiên cũ chưa có iat
+            if body and body.get("k") == "session" and (after == 0 or body.get("iat", 0) > after):
                 p = self._role(body["u"])
                 if p:
                     return p
@@ -208,8 +210,11 @@ class WebAuth:
         return None
 
     def session_token(self, user_id: str) -> str:
-        # iat có phần thập phân: đăng xuất rồi đăng nhập lại ngay trong cùng giây vẫn hợp lệ
-        return self.signer.sign({"k": "session", "u": user_id, "iat": time.time()}, SESSION_DAYS * 86400)
+        # Phiên hợp lệ khi iat > thời điểm đăng xuất gần nhất. Đồng hồ trên Windows có độ phân giải thô, nên phiên mới
+        # có thể cùng mốc với lần đăng xuất: đẩy iat lên sau mốc đó để đăng nhập lại ngay vẫn được.
+        epoch = self._sessions_valid_after(user_id)
+        iat = max(time.time(), epoch + 0.001) if epoch != float("inf") else time.time()
+        return self.signer.sign({"k": "session", "u": user_id, "iat": iat}, SESSION_DAYS * 86400)
 
     def revoke_sessions(self, user_id: str) -> None:
         """Đăng xuất: mọi cookie phiên đã cấp cho người này (mọi thiết bị) hết hiệu lực."""
