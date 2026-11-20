@@ -1,7 +1,7 @@
 # Nhiều agent chuyên trách: phân tích, đánh giá, đề xuất
 
 Mặc định bizagent dùng **một agent**: một model vừa truy vấn dữ liệu vừa trả lời. Bật chế độ **nhiều agent** để
-tách việc cho các agent chuyên trách, mỗi agent một prompt và (tuỳ chọn) một model riêng. Mọi kênh (web, Telegram,
+tách việc cho các agent chuyên trách, mỗi agent một prompt và (tuỳ chọn) một model riêng. Mọi kênh (Telegram,
 Zalo, Slack, terminal, REST API) vẫn đi qua `AgentService.ask()` nên không phải sửa gì ở kênh.
 
 ```
