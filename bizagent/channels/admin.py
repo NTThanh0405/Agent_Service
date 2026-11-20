@@ -107,7 +107,7 @@ def mount_admin(app: FastAPI, service, get_principal: Callable, page: Callable[[
         roles_opt = "".join(f'<option value="{e(r)}">{e(r)}</option>' for r in ws.info.roles)
         add_form = "" if not is_admin else f"""
 <form method="post" action="/admin/users/add" class="filters" style="padding:10px 0 0">
-<label>ID<input name="id" placeholder="telegram:123 / zalo:... / slack:U... / web:ten" required></label>
+<label>ID<input name="id" placeholder="telegram:123 / zalo:... / slack:U... / web:ten / email:ten@congty.vn" required></label>
 <label>Tên<input name="name"></label><label>Role<select name="role">{roles_opt}</select></label>
 <label>Mật khẩu (tài khoản web)<input name="password" type="password" autocomplete="new-password"></label>
 <button type="submit" style="align-self:flex-end">Thêm / cập nhật</button></form>"""

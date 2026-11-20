@@ -1,4 +1,4 @@
-# Báo cáo định kỳ gửi qua Telegram / Zalo / Slack. Hướng dẫn: docs/REPORTS.md
+# Báo cáo định kỳ gửi qua Telegram / Zalo / Slack / email. Hướng dẫn: docs/REPORTS.md
 # Xem trước: bizagent report bao_cao_sang --preview --to telegram:123   ·   gửi ngay: bizagent report bao_cao_sang
 reports:
   bao_cao_sang:

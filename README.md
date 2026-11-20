@@ -28,7 +28,7 @@ Mục lục: [Tính năng](#tính-năng) · [Chạy thử](#chạy-thử-5-phút
 | **Dữ liệu** | PostgreSQL, MySQL/MariaDB, SQL Server, SQLite, Oracle… · REST API khai báo bằng YAML (Base.vn, iPOS, MISA…) · Google Sheets · file CSV/Excel · MCP server · kho DuckDB đồng bộ theo lịch để ghép dữ liệu nhiều nguồn |
 | **Model AI** | Claude, ChatGPT, Gemini, DeepSeek, Ollama (chạy trên máy), mọi API tương thích OpenAI — đổi bằng một dòng |
 | **Tuỳ chỉnh theo doanh nghiệp** | Mỗi doanh nghiệp một thư mục *workspace*: prompt (Jinja2), định nghĩa chỉ số, SQL mẫu, phân quyền |
-| **Kênh** | Trang chat web, REST API, Telegram, Zalo OA, Slack, terminal, Claude Desktop/Cursor (MCP) |
+| **Kênh** | Trang chat web, REST API, Telegram, Zalo OA, Slack, terminal, Claude Desktop/Cursor (MCP) · báo cáo định kỳ qua cả email |
 | **Dashboard** | Dashboard sống viết bằng YAML/SQL/JS, tự làm mới, không hết hạn, agent tạo được bằng lời · hoặc đưa dữ liệu sang **Power BI** |
 | **Vận hành** | Báo cáo định kỳ · trang quản trị `/admin` · cấp quyền theo người có hạn dùng · audit log · phiên chat lưu DB |
 | **An toàn** | Chỉ cho `SELECT` (kiểm tra theo từng loại database) · phiên DB chỉ-đọc · che cột cá nhân · reviewer đối chiếu mọi con số trong câu trả lời với dữ liệu |
@@ -371,7 +371,8 @@ Test không gọi model AI thật và không cần mạng. CI (GitHub Actions) c
 - [x] MCP hai chiều, Zalo OA, phiên chat lưu DB, audit
 - [x] Báo cáo định kỳ, `/admin`, Slack, cấp quyền có hạn dùng, reviewer
 - [x] Hai phiên bản triển khai: Windows Server (Windows Service) và Linux (Docker)
-- [ ] Microsoft Teams · báo cáo qua email/PDF · tách nhiều agent chuyên trách khi cần
+- [x] Báo cáo định kỳ qua email (SMTP, bản HTML có bảng)
+- [ ] Microsoft Teams · báo cáo PDF / file đính kèm · tách nhiều agent chuyên trách khi cần
 
 Bản Nyna AI Agent trước đây (bot Telegram riêng cho chuỗi Nyna) được lưu ở tag git `nyna-v1`.
 

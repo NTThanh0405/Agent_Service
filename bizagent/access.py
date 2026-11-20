@@ -13,7 +13,8 @@ from datetime import datetime
 from bizagent.state import StateStore
 from bizagent.workspace import Workspace
 
-USER_ID = re.compile(r"^(telegram|zalo|slack|web|api):[A-Za-z0-9_.@-]{1,100}$")
+USER_ID = re.compile(r"^(?:(telegram|zalo|slack|web|api):[A-Za-z0-9_.@-]{1,100}"
+                     r"|email:[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,})$")
 MAX_HOURS = 24 * 366
 
 
@@ -35,7 +36,8 @@ def normalize_user_id(raw: str, actor_id: str) -> str:
     if ":" not in raw and actor_id and ":" in actor_id:
         raw = f"{actor_id.split(':', 1)[0]}:{raw}"
     if not USER_ID.match(raw):
-        raise AccessError(f"ID không hợp lệ: {raw} (dạng telegram:123, zalo:..., slack:U..., web:ten)")
+        raise AccessError(f"ID không hợp lệ: {raw} (dạng telegram:123, zalo:..., slack:U..., web:ten, "
+                          "email:ten@congty.vn)")
     return raw
 
 
