@@ -5,6 +5,10 @@ users:
   - id: "telegram:123456789"
     name: "Quản trị"
     role: admin
+  # Người nhận báo cáo qua email (cần SMTP_* trong .env, xem docs/REPORTS.md)
+  # - id: "email:giamdoc@congty.vn"
+  #   name: "Giám đốc"
+  #   role: admin
   # Tài khoản web (dashboard, Power BI): tạo password_hash bằng `bizagent hash-password <ten>`
   # - id: "web:lan"
   #   name: "Lan"

@@ -142,6 +142,22 @@ def cmd_check(args) -> int:
         missing = missing_env(zcfg)
         print(f"Kênh Zalo: {'thiếu ' + ', '.join(missing) if missing else 'đủ cấu hình'}")
         ok &= not missing
+    try:                                              # báo cáo có người nhận email -> cần SMTP
+        from bizagent.reports import load_reports, smtp_missing_env
+
+        users = {u.id: u for u in ws.users}
+        email_reports = [n for n, r in load_reports(ws).reports.items() if r.enabled and any(
+            x.startswith("email:") or (x.startswith("role:") and any(
+                u.role == x[5:] and u.id.startswith("email:") for u in users.values()))
+            for x in r.recipients)]
+        if email_reports:
+            missing = smtp_missing_env()
+            print(f"Email (báo cáo {', '.join(email_reports)}): "
+                  f"{'thiếu ' + ', '.join(missing) if missing else 'đủ cấu hình SMTP'}")
+            ok &= not missing
+    except Exception as e:
+        print(f"Báo cáo: LỖI cấu hình: {e}")
+        ok = False
     for role in ws.info.roles:
         print(f"Role {role}: nguồn {ws.sources_for_role(role) or '(không có)'}")
     try:

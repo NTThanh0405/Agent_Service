@@ -130,13 +130,13 @@ async def test_report_built_once_per_permission_group(demo_ws, fake_model_cls):
 
     rr = ReportRunner(svc, senders={"telegram": Sender()})
     builds = []
-    real_build = rr.build
+    real_build = rr.build_report
 
     async def counting_build(name, uid, today=None):
         builds.append(uid)
         return await real_build(name, uid, today)
 
-    rr.build = counting_build
+    rr.build_report = counting_build
     res = await rr.send_now("bao_cao_sang", ["telegram:1", "telegram:2", "telegram:3", "telegram:9"],
                             today=date(2026, 11, 19))
     assert set(res.values()) == {"đã gửi"}
