@@ -18,7 +18,15 @@ import duckdb
 from bizagent.security.guard import check_select
 from bizagent.security.masking import mask_rows
 from bizagent.sources.base import DataSource, QueryResult, SourceError, TableInfo
-from bizagent.tabular import SAFE_DUCKDB_CONFIG, create_table, infer_type, slugify, unique_names
+from bizagent.tabular import (
+    SAFE_DUCKDB_CONFIG,
+    QueryTimeout,
+    create_table,
+    execute_with_timeout,
+    infer_type,
+    slugify,
+    unique_names,
+)
 
 
 class TabularSource(DataSource):
@@ -27,6 +35,7 @@ class TabularSource(DataSource):
     def __init__(self, name: str, config: dict[str, Any]):
         super().__init__(name, config)
         self.max_rows = int(config.get("max_rows", 200))
+        self.timeout_seconds = float(config.get("timeout_seconds", 30))
         self.cache_seconds = int(config.get("cache_seconds", 300))
         self.mask_columns: list[str] = list(config.get("mask_columns") or [])
         self.column_types: dict[str, dict[str, str]] = config.get("column_types") or {}
@@ -104,9 +113,9 @@ class TabularSource(DataSource):
                 t = full.rpartition(".")[2]
                 cols, rows, _ = self.load(t)
                 create_table(con, t, cols, rows, self.column_types.get(t))
-            res = con.execute(checked.sql)
-            columns = [d[0] for d in res.description]
-            out = res.fetchmany(limit + 1)
+            columns, out = execute_with_timeout(con, checked.sql, self.timeout_seconds, limit + 1)
+        except QueryTimeout as e:
+            raise SourceError(f"Truy vấn trên {self.name} {e} nên đã bị huỷ") from e
         except duckdb.Error as e:
             raise SourceError(f"Lỗi SQL trên {self.name}: {str(e).splitlines()[0]}") from e
         finally:

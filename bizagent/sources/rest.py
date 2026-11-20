@@ -57,6 +57,7 @@ from bizagent.tabular import get_path, records_to_table
 _PLACEHOLDER = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 _INPUT_TYPES = {"string": str, "integer": int, "number": (int, float), "boolean": bool, "date": str}
 _RESERVED = {"period", "start", "end"}
+CACHE_MAX_ENTRIES = 200          # mỗi nguồn REST giữ tối đa chừng này kết quả trong bộ nhớ
 
 
 class RestSource(DataSource):
@@ -181,7 +182,14 @@ class RestSource(DataSource):
         rows = mask_rows(cols, rows, self.mask_columns)
         result = QueryResult(source=self.name, columns=cols, rows=rows, truncated=truncated,
                              meta={"operation": operation, "period": [values.get("start"), values.get("end")]})
-        self._cache[key] = (time.monotonic(), result)
+        with self._rate_lock:
+            now = time.monotonic()
+            self._cache[key] = (now, result)
+            if len(self._cache) > CACHE_MAX_ENTRIES:          # dọn mục hết hạn, rồi tới mục cũ nhất
+                for k in [k for k, (t, _) in self._cache.items() if now - t >= self.cache_seconds]:
+                    del self._cache[k]
+                for k in sorted(self._cache, key=lambda k: self._cache[k][0])[: len(self._cache) - CACHE_MAX_ENTRIES]:
+                    del self._cache[k]
         return result
 
     # ------------------------------------------------------------------ nội bộ

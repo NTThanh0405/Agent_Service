@@ -15,6 +15,7 @@ import asyncio
 import logging
 import os
 import time
+from collections import deque
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -68,6 +69,9 @@ class AgentService:
         self._ready_lock = asyncio.Lock()
         self._stack = AsyncExitStack()
         self.mcp_errors: dict[str, str] = {}
+        self._slots = asyncio.Semaphore(ws.agents.limits.max_concurrent)   # số câu hỏi xử lý cùng lúc
+        self._thread_locks: dict[str, asyncio.Lock] = {}                    # mỗi cuộc trò chuyện một lượt một lúc
+        self._recent: dict[str, deque[float]] = {}                          # thời điểm câu hỏi gần đây theo người
 
     @classmethod
     def from_workspace(cls, name_or_path: str | None = None, **kwargs: Any) -> AgentService:
@@ -107,39 +111,105 @@ class AgentService:
         conf = config.get("configurable") or {}
         return self.render_system_prompt(conf.get("role"), conf.get("user_id"))
 
+    # ------------------------------------------------------------------ giới hạn dùng
+    def _today(self) -> str:
+        from bizagent.prompts.engine import today_in
+
+        return today_in(self.ws).isoformat()
+
+    def _check_limits(self, user_id: str, role: str) -> str | None:
+        """Thông báo từ chối nếu người này vượt giới hạn tần suất / token trong ngày, ngược lại None."""
+        limits = self.ws.agents.limits
+        if role in limits.exempt_roles:
+            return None
+        if limits.per_user_per_minute > 0:
+            now = time.monotonic()
+            q = self._recent.setdefault(user_id, deque())
+            while q and now - q[0] > 60:
+                q.popleft()
+            if len(q) >= limits.per_user_per_minute:
+                return (f"Bạn đang hỏi quá nhanh (tối đa {limits.per_user_per_minute} câu mỗi phút). "
+                        "Hãy thử lại sau ít phút.")
+            q.append(now)
+            if len(self._recent) > 5000:                   # dọn người không còn hỏi
+                for uid in [u for u, d in self._recent.items() if not d or now - d[-1] > 60]:
+                    self._recent.pop(uid, None)
+        if limits.daily_tokens_per_user > 0:
+            used = self.store.kv_get(f"usage:{self._today()}:{user_id}") or {}
+            if used.get("tokens_in", 0) + used.get("tokens_out", 0) >= limits.daily_tokens_per_user:
+                return ("Bạn đã dùng hết hạn mức hôm nay. Hạn mức được làm mới vào ngày mai; "
+                        "cần thêm hãy liên hệ quản trị viên.")
+        return None
+
+    @staticmethod
+    def _token_usage(messages: list) -> tuple[int, int]:
+        """Tổng token vào/ra của các lượt gọi model trong câu hỏi vừa rồi (với model trả usage_metadata)."""
+        last_human = max((i for i, m in enumerate(messages) if isinstance(m, HumanMessage)), default=-1)
+        t_in = t_out = 0
+        for m in messages[last_human + 1:]:
+            usage = getattr(m, "usage_metadata", None) if isinstance(m, AIMessage) else None
+            if usage:
+                t_in += int(usage.get("input_tokens") or 0)
+                t_out += int(usage.get("output_tokens") or 0)
+        return t_in, t_out
+
+    def _thread_lock(self, key: str) -> asyncio.Lock:
+        lock = self._thread_locks.get(key)
+        if lock is None:
+            if len(self._thread_locks) > 2000:             # dọn khoá không ai giữ
+                for k in [k for k, v in self._thread_locks.items() if not v.locked()]:
+                    del self._thread_locks[k]
+            lock = self._thread_locks[key] = asyncio.Lock()
+        return lock
+
     # ------------------------------------------------------------------ hỏi đáp
     async def ask(self, text: str, *, user_id: str, role: str | None, thread_id: str) -> str:
         if role is None:
             return "Bạn chưa được cấp quyền dùng trợ lý này. Hãy liên hệ quản trị viên."
+        refused = await asyncio.to_thread(self._check_limits, user_id, role)
+        if refused:
+            self.audit(user_id, "ask", thread=thread_id, outcome="limited", chars=len(text))
+            return refused
         graph = await self.ensure_ready()
+        key = f"{user_id}:{thread_id}"
         config: RunnableConfig = {
-            "configurable": {"thread_id": f"{user_id}:{thread_id}", "role": role, "user_id": user_id},
+            "configurable": {"thread_id": key, "role": role, "user_id": user_id},
             "recursion_limit": self.settings.max_steps * 2 + 1,
         }
-        started = time.monotonic()
         outcome = "ok"
-        try:
-            state = await asyncio.wait_for(
-                graph.ainvoke({"messages": [HumanMessage(content=text)]}, config),
-                timeout=self.settings.timeout_seconds,
-            )
-            answer = "(không có câu trả lời)"
-            for msg in reversed(state["messages"]):
-                if isinstance(msg, AIMessage) and not msg.tool_calls:
-                    answer = message_text(msg).strip() or "(không có nội dung)"
-                    break
-            answer = self._review(answer, state["messages"], user_id)
-        except TimeoutError:
-            outcome, answer = "timeout", "Câu hỏi xử lý quá lâu. Hãy thử hỏi ngắn gọn hoặc thu hẹp khoảng thời gian."
-        except GraphRecursionError:
-            outcome, answer = "too_many_steps", "Câu hỏi quá phức tạp (vượt số bước cho phép). Hãy chia nhỏ câu hỏi."
-        except Exception as e:
-            outcome = "error"
-            self.audit(user_id, "ask", thread=thread_id, outcome=outcome, error=str(e)[:500])
-            raise
+        tokens = (0, 0)
+        # Cùng một cuộc trò chuyện: xử lý lần lượt (hai lượt song song ghi chồng lịch sử hội thoại).
+        # Cả tiến trình: tối đa limits.max_concurrent câu cùng lúc, câu sau chờ tới lượt.
+        async with self._thread_lock(key), self._slots:
+            started = time.monotonic()
+            try:
+                state = await asyncio.wait_for(
+                    graph.ainvoke({"messages": [HumanMessage(content=text)]}, config),
+                    timeout=self.settings.timeout_seconds,
+                )
+                answer = "(không có câu trả lời)"
+                for msg in reversed(state["messages"]):
+                    if isinstance(msg, AIMessage) and not msg.tool_calls:
+                        answer = message_text(msg).strip() or "(không có nội dung)"
+                        break
+                tokens = self._token_usage(state["messages"])
+                answer = self._review(answer, state["messages"], user_id)
+            except TimeoutError:
+                outcome = "timeout"
+                answer = "Câu hỏi xử lý quá lâu. Hãy thử hỏi ngắn gọn hoặc thu hẹp khoảng thời gian."
+            except GraphRecursionError:
+                outcome = "too_many_steps"
+                answer = "Câu hỏi quá phức tạp (vượt số bước cho phép). Hãy chia nhỏ câu hỏi."
+            except Exception as e:
+                outcome = "error"
+                self.audit(user_id, "ask", thread=thread_id, outcome=outcome, error=str(e)[:500])
+                raise
+            seconds = round(time.monotonic() - started, 2)
         await asyncio.to_thread(self.store.touch, user_id, thread_id, text[:80])
-        self.audit(user_id, "ask", thread=thread_id, outcome=outcome, chars=len(text),
-                   seconds=round(time.monotonic() - started, 2))
+        # Lượt bị timeout vẫn tốn token nhưng không đo được: chỉ cộng phần đo được.
+        await asyncio.to_thread(self.store.add_usage, self._today(), user_id, *tokens)
+        self.audit(user_id, "ask", thread=thread_id, outcome=outcome, chars=len(text), seconds=seconds,
+                   tokens_in=tokens[0], tokens_out=tokens[1])
         return answer
 
     def _review(self, answer: str, messages: list, user_id: str) -> str:
@@ -177,6 +247,8 @@ class AgentService:
         for uid, tid in victims:
             await self.delete_thread(uid, tid)
         await asyncio.to_thread(self.store.prune_audit, cfg.audit_days)
+        await asyncio.to_thread(self.store.prune_kv, "usage:", 90)          # mức dùng theo ngày giữ 90 ngày
+        await asyncio.to_thread(self.store.prune_kv, "login_link:", 2)      # link đăng nhập đã dùng (hạn 24 giờ)
         return len(victims)
 
     # ------------------------------------------------------------------ tác vụ nền

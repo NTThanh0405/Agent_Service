@@ -236,6 +236,31 @@ class StateStore:
             if c.execute(update(kv).where(kv.c.key == key).values(value=data, updated_at=_now())).rowcount == 0:
                 c.execute(insert(kv).values(key=key, value=data, updated_at=_now()))
 
+    def kv_prefix(self, prefix: str) -> dict[str, Any]:
+        """Mọi khoá bắt đầu bằng `prefix` (vd "usage:2026-11-20:")."""
+        with self.engine.connect() as c:
+            rows = c.execute(select(kv.c.key, kv.c.value).where(kv.c.key.startswith(prefix, autoescape=True))).all()
+        return {k: json.loads(v) for k, v in rows}
+
+    def add_usage(self, day: str, user_id: str, tokens_in: int, tokens_out: int) -> dict[str, int]:
+        """Cộng dồn mức dùng trong ngày của một người (trong một giao dịch). Trả về tổng mới."""
+        key = f"usage:{day}:{user_id}"
+        with self.engine.begin() as c:
+            v = c.execute(select(kv.c.value).where(kv.c.key == key)).scalar()
+            cur = json.loads(v) if v else {"asks": 0, "tokens_in": 0, "tokens_out": 0}
+            cur = {"asks": cur["asks"] + 1, "tokens_in": cur["tokens_in"] + tokens_in,
+                   "tokens_out": cur["tokens_out"] + tokens_out}
+            data = json.dumps(cur)
+            if c.execute(update(kv).where(kv.c.key == key).values(value=data, updated_at=_now())).rowcount == 0:
+                c.execute(insert(kv).values(key=key, value=data, updated_at=_now()))
+        return cur
+
+    def prune_kv(self, prefix: str, days: int) -> int:
+        """Xoá khoá `prefix...` không cập nhật quá `days` ngày (mức dùng cũ, link đăng nhập đã dùng...)."""
+        with self.engine.begin() as c:
+            return c.execute(delete(kv).where(kv.c.key.startswith(prefix, autoescape=True),
+                                              kv.c.updated_at < _now() - timedelta(days=days))).rowcount
+
     def close(self) -> None:
         self.engine.dispose()
 

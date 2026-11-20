@@ -12,7 +12,8 @@ sources:
     allowed_tables: ["public.*"]      # bảng agent được đọc: "schema.table", có ký tự đại diện *
     default_schema: public
     max_rows: 200                     # số dòng tối đa trả cho agent mỗi câu
-    timeout_seconds: 15
+    timeout_seconds: 15               # câu truy vấn của agent: hết giờ thì database tự huỷ câu đó
+    fetch_timeout_seconds: 300        # đồng bộ về kho, dashboard, Power BI
     mask_columns: ["phone", "email", "address"]   # cột bị che trước khi tới AI
 
   # --- MySQL / MariaDB (pip install "bizagent[mysql]")

@@ -113,6 +113,39 @@ def infer_type(values: list[Any]) -> str:
     return "VARCHAR"
 
 
+class QueryTimeout(Exception):
+    """Câu truy vấn DuckDB chạy quá giới hạn thời gian và đã bị ngắt."""
+
+
+def execute_with_timeout(con: duckdb.DuckDBPyConnection, sql: str, seconds: float, fetch: int) -> tuple[list, list]:
+    """Chạy câu SELECT trên DuckDB, hết `seconds` thì ngắt hẳn (con.interrupt()) thay vì để thread chạy mãi
+    (DuckDB không có statement_timeout). Trả về (tên cột, tối đa `fetch` dòng)."""
+    import threading
+
+    timed_out = threading.Event()
+
+    def stop() -> None:
+        timed_out.set()
+        con.interrupt()
+
+    timer = threading.Timer(seconds, stop)
+    timer.daemon = True
+    timer.start()
+    try:
+        res = con.execute(sql)
+        columns = [d[0] for d in res.description]
+        rows = res.fetchmany(fetch)
+    except duckdb.Error:
+        if timed_out.is_set():
+            raise QueryTimeout(f"quá {seconds:g} giây") from None
+        raise
+    finally:
+        timer.cancel()
+    if timed_out.is_set():
+        raise QueryTimeout(f"quá {seconds:g} giây")
+    return columns, rows
+
+
 def quote_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 

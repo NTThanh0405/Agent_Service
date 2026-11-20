@@ -47,7 +47,7 @@ excel = ["openpyxl>=3.1"]                   # đọc file .xlsx trong nguồn ty
 mcp = ["mcp>=1.2", "langchain-mcp-adapters>=0.1"]   # nguồn type: mcp + lệnh bizagent mcp-server
 postgres-state = ["langgraph-checkpoint-postgres>=2.0", "psycopg[binary,pool]>=3.2"]   # lưu phiên chat vào PostgreSQL
 # --- Kênh chat ---
-telegram = ["aiogram>=3.13"]
+telegram = ["aiogram>=3.13,<3.33"]          # 3.33.0 lỗi ngay khi import trên Python 3.11 (TypeError: unhashable type: 'FailFast')
 all = ["bizagent[llm-all,postgres,mysql,telegram,gsheets,excel,mcp]"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.6"]
 

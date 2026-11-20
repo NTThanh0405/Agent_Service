@@ -21,6 +21,8 @@ Dùng engine đồng bộ chạy trong thread: chạy được mọi driver, kh�
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import create_engine, event, inspect, text
@@ -46,7 +48,8 @@ class SqlSource(DataSource):
         if not self.allowed_tables:
             raise SourceError(f"Nguồn {name}: phải khai báo allowed_tables (bảng agent được đọc)")
         self.max_rows = int(config.get("max_rows", 200))
-        self.timeout_seconds = int(config.get("timeout_seconds", 15))
+        self.timeout_seconds = int(config.get("timeout_seconds", 15))               # câu truy vấn của agent
+        self.fetch_timeout_seconds = int(config.get("fetch_timeout_seconds", 300))  # đồng bộ, dashboard, Power BI
         self.mask_columns: list[str] = list(config.get("mask_columns") or [])
         self._columns_cache: dict[tuple[str, str], list[str]] = {}
         self.engine = self._make_engine(url)
@@ -86,6 +89,31 @@ class SqlSource(DataSource):
                 log.warning("Nguồn %s: không đặt được chế độ chỉ-đọc: %s", self.name, e)
 
         return engine
+
+    def _set_timeout(self, conn, seconds: int) -> Callable[[], None]:
+        """Đặt giới hạn thời gian cho câu truy vấn sắp chạy, NGAY TRONG database: hết giờ thì database tự huỷ câu đó.
+        (asyncio.wait_for ở tầng trên chỉ bỏ chờ, còn thread và câu truy vấn vẫn chạy tiếp, chiếm kết nối.)
+        Trả về hàm dọn dẹp."""
+        ms = max(1, seconds) * 1000
+        backend = self._sa_dialect
+        dbapi = conn.connection.driver_connection
+        try:
+            if backend == "postgresql":
+                conn.exec_driver_sql(f"SET LOCAL statement_timeout = {ms}")
+            elif backend in ("mysql", "mariadb"):
+                conn.exec_driver_sql(f"SET SESSION MAX_EXECUTION_TIME = {ms}")
+            elif backend == "mssql" and hasattr(dbapi, "timeout"):
+                dbapi.timeout = seconds                     # pyodbc
+            elif backend == "oracle" and hasattr(dbapi, "call_timeout"):
+                dbapi.call_timeout = ms                     # python-oracledb
+            elif backend == "sqlite" and hasattr(dbapi, "set_progress_handler"):
+                deadline = time.monotonic() + seconds
+                # trả về khác 0 => SQLite ngắt câu truy vấn (sqlite3.OperationalError: interrupted)
+                dbapi.set_progress_handler(lambda: int(time.monotonic() > deadline), 10_000)
+                return lambda: dbapi.set_progress_handler(None, 0)
+        except Exception as e:
+            log.warning("Nguồn %s: không đặt được timeout truy vấn: %s", self.name, e)
+        return lambda: None
 
     def _fallback_schema(self) -> str | None:
         return {"sqlite": "main", "postgresql": "public", "mssql": "dbo"}.get(self._sa_dialect)
@@ -160,14 +188,14 @@ class SqlSource(DataSource):
         checked = check_select(
             query, dialect=self.dialect, allowed_tables=self.allowed_tables, default_schema=self.default_schema
         )
-        return self._execute(checked, min(max_rows or self.max_rows, self.max_rows))
+        return self._execute(checked, min(max_rows or self.max_rows, self.max_rows), self.timeout_seconds)
 
     def fetch(self, query: str, limit: int) -> QueryResult:
         """Cho đồng bộ về kho: vẫn qua guard và che cột, nhưng giới hạn dòng do job quyết định."""
         checked = check_select(
             query, dialect=self.dialect, allowed_tables=self.allowed_tables, default_schema=self.default_schema
         )
-        return self._execute(checked, limit)
+        return self._execute(checked, limit, self.fetch_timeout_seconds)
 
     def _table_columns(self, schema: str | None, table: str) -> list[str]:
         """Cột của bảng (theo thứ tự trong DB), có cache: dùng để che cột ngay trong câu SQL."""
@@ -180,7 +208,7 @@ class SqlSource(DataSource):
             self._columns_cache[key] = cols
         return self._columns_cache[key]
 
-    def _execute(self, checked, limit: int) -> QueryResult:
+    def _execute(self, checked, limit: int, timeout: int) -> QueryResult:
         sql = checked.sql
         if self.mask_columns:
             try:
@@ -188,16 +216,22 @@ class SqlSource(DataSource):
                                  columns_of=self._table_columns, default_schema=self.default_schema)
             except MaskingError as e:
                 raise SourceError(str(e)) from e
+        started = time.monotonic()
         try:
             with self.engine.connect() as conn:
+                cleanup = self._set_timeout(conn, timeout)
                 try:
                     # exec_driver_sql: không diễn giải ":ten" như text() (chuỗi '10:30' vẫn đúng)
                     res = conn.exec_driver_sql(sql)
                     columns = list(res.keys())
                     rows = [tuple(r) for r in res.fetchmany(limit + 1)]
                 finally:
+                    cleanup()
                     conn.rollback()                 # không bao giờ commit
         except SQLAlchemyError as e:
+            if time.monotonic() - started >= timeout * 0.95:
+                raise SourceError(f"Truy vấn trên {self.name} quá {timeout} giây nên đã bị huỷ. "
+                                  "Hãy thu hẹp khoảng thời gian hoặc gộp dữ liệu (GROUP BY).") from e
             msg = str(getattr(e, "orig", e)).splitlines()[0][:500]
             raise SourceError(f"Lỗi khi chạy SQL trên {self.name}: {msg}") from e
         truncated = len(rows) > limit

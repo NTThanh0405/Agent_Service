@@ -152,6 +152,17 @@ def mount_admin(app: FastAPI, service, get_principal: Callable, page: Callable[[
                                   + btn(f"/admin/reports/{name}/send", "Gửi ngay", {})])
                 parts.append(card("Báo cáo định kỳ", table(["Tên", "Tiêu đề", "Lịch", "Người nhận", ""], rrows)
                                   or "<p>Chưa có reports.yaml</p>", "bao-cao"))
+            # mức dùng hôm nay (token do model báo về; dùng để soát chi phí API)
+            day = service._today()
+            usage = await asyncio.to_thread(store.kv_prefix, f"usage:{day}:")
+            lim = ws.agents.limits.daily_tokens_per_user
+            urows = sorted(((k.split(":", 2)[2], v) for k, v in usage.items()),
+                           key=lambda x: -(x[1]["tokens_in"] + x[1]["tokens_out"]))
+            utable = table(["Người dùng", "Câu hỏi", "Token vào", "Token ra", "Hạn mức/ngày"],
+                           [[e(uid), str(v["asks"]), f'{v["tokens_in"]:,}', f'{v["tokens_out"]:,}',
+                             f"{lim:,}" if lim else "không giới hạn"] for uid, v in urows[:100]])
+            parts.append(card(f"Mức dùng hôm nay ({day})", utable if urows else "<p>Chưa có câu hỏi nào.</p>",
+                              "muc-dung"))
             parts.append('<p><a href="/admin/audit">Xem audit log →</a></p>')
         return page("Quản trị", "".join(parts))
 
