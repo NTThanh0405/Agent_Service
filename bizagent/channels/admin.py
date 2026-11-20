@@ -1,4 +1,4 @@
-"""Trang quản trị web /admin: người dùng, quyền cấp riêng, nguồn dữ liệu, đồng bộ, báo cáo, audit.
+"""Trang quản trị web /admin: người dùng, quyền cấp riêng, nguồn dữ liệu, đồng bộ, báo cáo, Power BI, audit.
 
 - Role trong `grant_roles` vào được trang (cấp/thu hồi quyền trong phạm vi nguồn mình xem được).
 - Role trong `admin_roles` thêm/xoá người dùng, chạy đồng bộ, gửi báo cáo, xem audit.
@@ -152,6 +152,21 @@ def mount_admin(app: FastAPI, service, get_principal: Callable, page: Callable[[
                                   + btn(f"/admin/reports/{name}/send", "Gửi ngay", {})])
                 parts.append(card("Báo cáo định kỳ", table(["Tên", "Tiêu đề", "Lịch", "Người nhận", ""], rrows)
                                   or "<p>Chưa có reports.yaml</p>", "bao-cao"))
+            # đẩy dữ liệu lên Power BI Service (powerbi.push)
+            pbi = service.catalog.config.powerbi if service.catalog else None
+            if pbi and pbi.enabled and pbi.push:
+                from bizagent.dashboards.powerbi_push import model_name, read_state
+
+                st = await asyncio.to_thread(read_state, ws.path)
+                when = st.get("pushed_at", "")
+                when = f"{when[:16].replace('T', ' ')} UTC" if when else "chưa đẩy lần nào"
+                prows = [[e(n), e(v) if v.startswith("ok") else f'<span class="err">{e(v)}</span>']
+                         for n, v in (st.get("datasets") or {}).items()]
+                body = (f"<p>Model <b>{e(model_name(pbi.push, ws.name))}</b> · workspace <code>{e(pbi.push.workspace_id)}"
+                        f"</code> · {e(pbi.push.mode)} mỗi {e(pbi.push.every)} · lần đẩy cuối: {e(when)}</p>"
+                        + (table(["Dataset", "Kết quả lần cuối"], prows) if prows else "")
+                        + "<p>" + btn("/admin/powerbi/push", "Đẩy ngay", {}) + "</p>")
+                parts.append(card("Power BI Service (tự đẩy)", body, "powerbi"))
             # mức dùng hôm nay (token do model báo về; dùng để soát chi phí API)
             day = service._today()
             usage = await asyncio.to_thread(store.kv_prefix, f"usage:{day}:")
@@ -237,6 +252,22 @@ def mount_admin(app: FastAPI, service, get_principal: Callable, page: Callable[[
             return done(f"Đồng bộ {job} lỗi: {ex}", "#nguon")
         store.audit(p.user_id, "sync_manual", job=job, rows=n)
         return done(f"Đồng bộ {job}: {n} dòng", "#nguon")
+
+    @app.post("/admin/powerbi/push")
+    async def powerbi_push_now(request: Request):
+        p, redirect = guard(request, need_admin=True)
+        if redirect:
+            return redirect
+        await form(request)
+        try:
+            pusher = service.powerbi_pusher()
+        except Exception as ex:
+            return done(f"Power BI lỗi cấu hình: {ex}", "#powerbi")
+        if pusher is None:
+            raise HTTPException(status_code=404)
+        res = await asyncio.to_thread(pusher.push_all)
+        store.audit(p.user_id, "powerbi_push_manual", result=res)
+        return done("Power BI: " + ("; ".join(f"{k}: {v}" for k, v in res.items()) or "không có dataset"), "#powerbi")
 
     def report_runner():
         from bizagent.reports import ReportRunner

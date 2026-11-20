@@ -34,6 +34,7 @@ powerbi:
   datasets: [doanh_thu_ngay, top_mon]  # dataset mở cho Power BI ("*" = tất cả)
   default_period: "365 ngày qua"
   export: {every: 1h, formats: [parquet, csv], dir: data/powerbi}   # tuỳ chọn
+  push: {every: 1h, workspace_id: "<GUID workspace Power BI>", mode: replace}   # tuỳ chọn: tự đẩy lên Power BI Service
   reports:                             # báo cáo Power BI có sẵn: agent gửi link khi được hỏi
     tai_chinh: {title: "Báo cáo tài chính", url: "https://app.powerbi.com/...", roles: [admin]}
 ```
@@ -156,15 +157,134 @@ Có `powerbi.export` thì server ghi `data/powerbi/<dataset>.parquet` và `.csv`
 `bizagent powerbi-export`). Power BI đọc bằng connector **Folder** hoặc **Parquet** (qua gateway nếu dùng Power BI Service).
 File được thay một lần (ghi file tạm rồi đổi tên) nên Power BI không đọc phải file đang ghi dở.
 
-### Cách 3 — Power BI nối thẳng database
+### Cách 3 — Tự đẩy lên Power BI Service (push semantic model)
+
+bizagent **tự đẩy** dữ liệu lên Power BI Service theo lịch qua Power BI REST API. Power BI không cần gọi ngược vào
+server, nên **không cần** địa chỉ HTTPS công khai, không cần On-premises data gateway, không cần đặt Scheduled refresh:
+server chỉ cần ra được Internet tới `login.microsoftonline.com` và `api.powerbi.com`.
+
+Mỗi dataset thành **một bảng** trong **một semantic model kiểu Push** trên workspace Power BI. Lần đẩy đầu, nếu chưa có
+model thì bizagent tạo (kiểu cột suy từ dữ liệu: số nguyên → Int64, số thực → Double, ngày/giờ → DateTime, còn lại →
+String). Dữ liệu đi qua đúng lớp kiểm soát như dashboard và `/powerbi`: guard chỉ-SELECT, allowlist bảng, **che cột**
+`mask_columns` của nguồn.
+
+#### Bước 1 — Tạo app registration (Microsoft Entra ID)
+
+1. Vào [Azure portal](https://portal.azure.com) → **Microsoft Entra ID** → **App registrations** → **New registration**.
+   Tên ví dụ `bizagent-powerbi`, *Supported account types*: **Single tenant**, bỏ trống Redirect URI → **Register**.
+2. Trang **Overview**: chép **Directory (tenant) ID** và **Application (client) ID**.
+3. **Certificates & secrets** → **New client secret** → chọn hạn dùng → chép **Value** (chỉ hiện một lần).
+   Ghi lịch đổi secret trước ngày hết hạn (hết hạn thì lần đẩy báo lỗi lấy token).
+4. **Không** thêm API permissions cho Power BI: với service principal, Microsoft khuyên không cấp delegated/application
+   permission; quyền đến từ tenant setting và vai trò trong workspace (bước 2, 3).
+5. (Khuyên dùng) **Groups** → **New group**: Security group, ví dụ `sg-powerbi-api`, thêm app vừa tạo làm member.
+
+#### Bước 2 — Cho phép service principal dùng Power BI API (Power BI admin portal)
+
+Cần tài khoản Fabric/Power BI administrator.
+
+1. [app.powerbi.com](https://app.powerbi.com) → ⚙ **Settings** → **Admin portal** → **Tenant settings**.
+2. Mục **Developer settings** → bật setting cho service principal gọi API: tên mới
+   **Service principals can call Fabric public APIs** (các tên cũ: *Service principals can use Fabric APIs*,
+   *Allow service principals to use Power BI APIs*; Microsoft đổi tên theo đợt cập nhật admin portal).
+3. Chọn **Specific security groups** → thêm `sg-powerbi-api` (tránh mở cho cả tổ chức) → **Apply**.
+   Thay đổi có thể mất khoảng 15 phút mới có hiệu lực.
+
+#### Bước 3 — Workspace
+
+1. Power BI Service → **Workspaces** → **New workspace** (ví dụ `Bizagent`). **Không dùng My Workspace**: service
+   principal không truy cập được My Workspace.
+2. Workspace → **Manage access** → **Add people or groups** → tìm tên app (`bizagent-powerbi`) hoặc nhóm
+   `sg-powerbi-api` → vai trò **Member** (hoặc Admin) → **Add**.
+3. Chép **workspace ID**: mở workspace, URL có dạng `https://app.powerbi.com/groups/<workspace ID>/list`.
+
+#### Bước 4 — Cấu hình bizagent
+
+`.env` (của dự án hoặc `workspaces/<ten>/.env`; không commit):
+
+```
+POWERBI_TENANT_ID=<Directory (tenant) ID>
+POWERBI_CLIENT_ID=<Application (client) ID>
+POWERBI_CLIENT_SECRET=<Value của client secret>
+```
+
+`dashboards.yaml`:
+
+```yaml
+powerbi:
+  enabled: true
+  datasets: [doanh_thu_ngay, muc_tieu_thang, top_mon]
+  push:
+    every: 1h                         # 30m, 1h, 1d
+    workspace_id: "1f2e3d4c-...."     # bước 3
+    model: "Bán hàng"                 # tên semantic model; trống = "bizagent <tên workspace>"
+    datasets: []                      # trống = như powerbi.datasets; "*" = mọi dataset
+    mode: replace                     # replace | append
+    period: "365 ngày qua"            # kỳ cho {{start}}/{{end}}; trống = powerbi.default_period
+    retention: none                   # none | basicFIFO
+    batch_rows: 10000                 # dòng mỗi request (tối đa 10.000)
+```
+
+| `mode` | Làm gì | Dùng khi |
+|---|---|---|
+| `replace` | Xoá mọi dòng của bảng rồi đẩy lại toàn bộ kết quả dataset | Mặc định; dataset tổng hợp, vài trăm nghìn dòng trở xuống |
+| `append` | Chỉ thêm dòng, không xoá | Dữ liệu mới theo kỳ, vd `period: "hôm qua"` + `every: 1d`; nên kèm `retention: basicFIFO` |
+
+`retention: basicFIFO`: Power BI giữ 200.000 dòng mới nhất mỗi bảng, tự bỏ dòng cũ. `none`: giữ tới 5.000.000 dòng.
+Chỉ có tác dụng khi model được tạo; đổi sau đó phải tạo model mới.
+
+#### Bước 5 — Kiểm tra và chạy
+
+```
+bizagent check                 # dòng "Power BI push (...): kết nối workspace ... OK"
+bizagent powerbi-push --check  # chỉ thử token + quyền vào workspace, không đẩy
+bizagent powerbi-push          # đẩy ngay một lần
+```
+
+Sau đó `bizagent run` / `serve` tự đẩy theo `every` (tôn trọng `BIZAGENT_BACKGROUND_TASKS=0`: chỉ một tiến trình đẩy).
+Trang **`/admin`** có mục *Power BI Service (tự đẩy)*: lần đẩy cuối, kết quả từng dataset, nút **Đẩy ngay**.
+Trạng thái cũng ghi ở `data/powerbi/_push_state.json`.
+
+Trên Power BI Service: workspace → semantic model vừa tạo → **Create report** (hoặc Power BI Desktop → *Power BI
+semantic models* → chọn model). Report thấy dữ liệu mới sau mỗi lần đẩy, không cần refresh.
+
+#### Giới hạn của Power BI (bizagent tự tuân thủ)
+
+| Giới hạn | bizagent làm gì |
+|---|---|
+| 10.000 dòng mỗi request POST rows; ~16 MB mỗi request | Chia lô theo `batch_rows` (≤ 10.000) và ≤ 15 MB |
+| 120 request POST rows mỗi phút mỗi model | Tự chờ khi chạm ngưỡng; HTTP 429/5xx thì chờ (theo `Retry-After`) rồi thử lại |
+| 1.000.000 dòng thêm vào mỗi giờ mỗi model | Đếm số dòng đã đẩy trong 1 giờ qua; vượt thì **không xoá, không đẩy** dataset đó, báo lỗi, lần sau thử lại |
+| 5.000.000 dòng mỗi bảng (`none`) / 200.000 (`basicFIFO`) | Lấy tối đa chừng ấy dòng (và `powerbi.max_rows`); bị cắt thì kết quả ghi "BỊ CẮT" |
+| 75 bảng, 75 cột | Báo lỗi cấu hình / lỗi dataset |
+| Chuỗi tối đa 4.000 ký tự | Cắt bớt |
+
+Lưu ý:
+
+- **Không thêm được bảng** vào push model đã tạo. Thêm dataset vào danh sách sau lần đẩy đầu thì dataset đó báo lỗi;
+  đặt `model` tên mới (bizagent tạo model mới) hoặc xoá model cũ trên Power BI (report dựng trên model cũ cũng mất).
+  Vì vậy nếu lần đầu có dataset lỗi, bizagent **chưa tạo** model. Thêm/đổi **cột** thì bizagent tự cập nhật schema bảng.
+- `replace` xoá rồi mới đẩy: trong lúc đẩy, report có thể thấy bảng thiếu dòng. Lỗi giữa chừng thì bảng thiếu dữ liệu
+  tới lần đẩy sau.
+- Push model không có Power Query, không refresh từ nguồn; quan hệ giữa các bảng và measure dựng trong report.
+  Cần mô hình phức tạp thì dùng cách 1 hoặc 2.
+- Microsoft thông báo **ngừng cho tạo mới** push semantic model sau **31/10/2027** (model đã tạo vẫn chạy). Sau mốc
+  đó, model mới nên dùng cách 1/2 hoặc Real-Time Intelligence của Microsoft Fabric.
+- Cloud riêng (US Gov, China): đổi `push.authority` và `push.api_url`.
+
+Tài liệu Microsoft: [Push datasets REST API](https://learn.microsoft.com/rest/api/power-bi/push-datasets),
+[giới hạn push semantic model](https://learn.microsoft.com/power-bi/developer/embedded/push-datasets-limitations),
+[service principal](https://learn.microsoft.com/power-bi/developer/embedded/embed-service-principal).
+
+### Cách 4 — Power BI nối thẳng database
 
 Power BI kết nối trực tiếp được PostgreSQL / MySQL / SQL Server. Khi đó bizagent không tham gia; nên tạo
-tài khoản chỉ-đọc riêng cho Power BI. Kho DuckDB (`warehouse`) thì nên dùng cách 1 hoặc 2 vì DuckDB chỉ cho
+tài khoản chỉ-đọc riêng cho Power BI. Kho DuckDB (`warehouse`) thì nên dùng cách 1, 2 hoặc 3 vì DuckDB chỉ cho
 một tiến trình mở file để ghi.
 
 ### Không làm
 
-- **Push/streaming dataset** của Power BI (đẩy dữ liệu realtime qua REST API): cần đăng ký ứng dụng Azure AD
-  và Microsoft đang thu hẹp tính năng này. Muốn dashboard realtime thì dùng dashboard sống.
+- **Streaming dataset** realtime (từng giây, tile streaming): Microsoft đang ngừng tính năng này. Muốn dashboard
+  realtime thì dùng dashboard sống; cách 3 đẩy theo lịch (từ vài phút một lần).
 - **Nhúng báo cáo Power BI vào trang bizagent** (Power BI Embedded): cần capacity trả phí riêng; thay vào đó
   khai báo `powerbi.reports` để agent và trang `/dashboards` gửi link báo cáo.

@@ -254,13 +254,14 @@ class AgentService:
     # ------------------------------------------------------------------ tác vụ nền
     def start_background_tasks(self) -> list[asyncio.Task]:
         """Lịch đồng bộ (sync.yaml, nếu run_in_server) + xuất file Power BI (nếu có powerbi.export)
-        + dọn phiên chat cũ mỗi giờ. Gọi trong event loop của server/bot."""
+        + đẩy dữ liệu lên Power BI Service (nếu có powerbi.push) + dọn phiên chat cũ mỗi giờ.
+        Gọi trong event loop của server/bot."""
         from bizagent.dashboards.powerbi import PowerBIExporter
         from bizagent.sync import build_runner
 
         if os.environ.get("BIZAGENT_BACKGROUND_TASKS", "1") == "0":
             # nhiều tiến trình cùng workspace: chỉ MỘT tiến trình chạy tác vụ nền (tránh gửi báo cáo trùng)
-            log.info("BIZAGENT_BACKGROUND_TASKS=0: tiến trình này không chạy đồng bộ, báo cáo, xuất Power BI")
+            log.info("BIZAGENT_BACKGROUND_TASKS=0: tiến trình này không chạy đồng bộ, báo cáo, xuất/đẩy Power BI")
             return []
         tasks: list[asyncio.Task] = [asyncio.create_task(self._prune_forever())]
         runner = build_runner(self.ws, self.registry)
@@ -279,7 +280,24 @@ class AgentService:
         if pbi and pbi.enabled and pbi.export:
             self.powerbi_exporter = PowerBIExporter(self.dashboard_engine)
             tasks.append(asyncio.create_task(self.powerbi_exporter.run_forever()))
+        if pbi and pbi.enabled and pbi.push:
+            try:
+                pusher = self.powerbi_pusher()
+                tasks.append(asyncio.create_task(pusher.run_forever()))
+            except Exception as e:
+                log.error("Đẩy Power BI lỗi cấu hình: %s", e)
         return tasks
+
+    def powerbi_pusher(self):
+        """PowerBIPusher dùng chung cho lịch nền và nút "Đẩy ngay" ở /admin (None nếu chưa cấu hình powerbi.push)."""
+        from bizagent.dashboards.powerbi_push import PowerBIPusher
+
+        if getattr(self, "_powerbi_pusher", None) is None:
+            pbi = self.catalog.config.powerbi if self.catalog else None
+            if not pbi or not pbi.enabled or not pbi.push:
+                return None
+            self._powerbi_pusher = PowerBIPusher(self.dashboard_engine)
+        return self._powerbi_pusher
 
     async def _prune_forever(self) -> None:
         while True:
@@ -309,5 +327,7 @@ class AgentService:
         self.close()
 
     def close(self) -> None:
+        if getattr(self, "_powerbi_pusher", None) is not None:
+            self._powerbi_pusher.close()
         self.registry.close()
         self.store.close()
