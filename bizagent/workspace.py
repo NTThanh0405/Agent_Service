@@ -148,12 +148,59 @@ class LimitSettings(_Strict):
         return v
 
 
+class TeamMemberSettings(_Strict):
+    """Một agent chuyên trách trong chế độ nhiều agent. Để trống (null) thì lấy theo mục `agent`."""
+
+    enabled: bool = True
+    model: str | None = None                    # alias trong `models`, "default" hoặc "provider:model"
+    max_steps: int | None = None                # số vòng gọi tool tối đa (chỉ analyst, designer gọi tool)
+    max_tokens: int | None = None
+    temperature: float | None = None
+
+    @field_validator("max_steps")
+    @classmethod
+    def _steps(cls, v: int | None) -> int | None:
+        if v is not None and v < 1:
+            raise ValueError("max_steps phải >= 1")
+        return v
+
+
+class MultiAgentSettings(_Strict):
+    """Chế độ nhiều agent: router chọn đường -> analyst lấy số liệu -> advisor đánh giá, đề xuất;
+    designer lo dashboard. Tắt (mặc định) thì dùng một agent như cũ."""
+
+    enabled: bool = False
+    router: TeamMemberSettings = Field(default_factory=TeamMemberSettings)    # tắt: mọi câu đi analyst
+    analyst: TeamMemberSettings = Field(default_factory=TeamMemberSettings)   # luôn bật
+    advisor: TeamMemberSettings = Field(default_factory=TeamMemberSettings)   # tắt: không có phần đề xuất
+    designer: TeamMemberSettings = Field(default_factory=TeamMemberSettings)  # tắt: analyst tự làm dashboard
+
+    @field_validator("analyst")
+    @classmethod
+    def _analyst(cls, v: TeamMemberSettings) -> TeamMemberSettings:
+        if not v.enabled:
+            raise ValueError("analyst là agent truy vấn dữ liệu, không tắt được")
+        return v
+
+
+AGENT_NAMES = ("router", "analyst", "advisor", "designer")
+
+
 class AgentsConfig(_Strict):
     default_model: str = "anthropic:claude-sonnet-5-5"
     models: dict[str, str | ModelSpec] = Field(default_factory=dict)
     agent: AgentSettings = Field(default_factory=AgentSettings)
+    multi_agent: MultiAgentSettings = Field(default_factory=MultiAgentSettings)
     reviewer: ReviewerSettings = Field(default_factory=ReviewerSettings)
     limits: LimitSettings = Field(default_factory=LimitSettings)
+
+    def settings_for(self, name: str) -> AgentSettings:
+        """Cấu hình của một agent chuyên trách: giá trị riêng trong multi_agent.<name>, thiếu thì lấy từ `agent`."""
+        if name not in AGENT_NAMES:
+            raise ValueError(f"Không có agent '{name}'. Có: {', '.join(AGENT_NAMES)}")
+        member: TeamMemberSettings = getattr(self.multi_agent, name)
+        override = {k: v for k, v in member.model_dump(exclude={"enabled"}).items() if v is not None}
+        return self.agent.model_copy(update=override)
 
 
 class UserEntry(_Strict):

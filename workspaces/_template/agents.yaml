@@ -24,6 +24,15 @@ agent:
   max_tokens: 3000
   temperature: null       # để null; một số model (vd Claude đời mới) từ chối temperature
 
+# Nhiều agent chuyên trách (docs/AGENTS.md): router chọn đường -> analyst lấy số liệu -> advisor đánh giá, đề xuất;
+# designer lo dashboard. Mục nào để trống thì lấy theo `agent` ở trên.
+multi_agent:
+  enabled: false          # true = bật; false = một agent như cũ
+  router:   {model: fast}             # model rẻ: chỉ chọn đường, không gọi tool. enabled: false = bỏ router
+  analyst:  {model: default, max_steps: 12}   # truy vấn dữ liệu: nên dùng model mạnh nhất
+  advisor:  {model: default}          # đánh giá + đề xuất từ số liệu analyst đã lấy. enabled: false = không đề xuất
+  designer: {enabled: true}           # tạo / tìm dashboard. false = analyst tự làm
+
 limits:                   # chống quá tải và chống tốn tiền API ngoài ý muốn
   max_concurrent: 8       # số câu hỏi xử lý cùng lúc (câu sau chờ tới lượt)
   per_user_per_minute: 10 # số câu hỏi tối đa mỗi người mỗi phút (0 = không giới hạn)

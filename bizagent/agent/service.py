@@ -23,8 +23,10 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.errors import GraphRecursionError
 
-from bizagent.agent.graph import build_graph
+from bizagent.agent.graph import build_graph, message_text
+from bizagent.agent.team import Member, build_team_graph, recursion_limit
 from bizagent.agent.tools import build_tools
+from bizagent.agent.usage import TokenMeter
 from bizagent.dashboards.config import DashboardCatalog
 from bizagent.dashboards.engine import DashboardEngine
 from bizagent.llm.registry import ResolvedModel, build_chat_model, resolve_model
@@ -34,16 +36,6 @@ from bizagent.state import StateStore, open_checkpointer
 from bizagent.workspace import Workspace, WorkspaceError, load_workspace
 
 log = logging.getLogger(__name__)
-
-
-def message_text(msg: Any) -> str:
-    """Nội dung chữ của tin nhắn (một số model trả content dạng danh sách khối)."""
-    content = getattr(msg, "content", msg)
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
-    return str(content)
 
 
 class AgentService:
@@ -64,6 +56,12 @@ class AgentService:
             log.error("Dashboard lỗi cấu hình: %s", e)
         self.dashboard_engine = DashboardEngine(self.registry, self.catalog) if self.catalog else None
         self._model = model if model is not None else build_chat_model(self.model_ref, self.settings)
+        # Chế độ nhiều agent: model + cấu hình riêng từng agent (model truyền vào khi test thì dùng cho mọi agent)
+        self.multi_agent = ws.agents.multi_agent.enabled
+        self.agent_model_refs: dict[str, ResolvedModel] = {}
+        self._members: dict[str, Member] = {}
+        if self.multi_agent:
+            self._members = self._build_members(model)
         self._checkpointer_override = checkpointer
         self._graph = None
         self._ready_lock = asyncio.Lock()
@@ -72,6 +70,28 @@ class AgentService:
         self._slots = asyncio.Semaphore(ws.agents.limits.max_concurrent)   # số câu hỏi xử lý cùng lúc
         self._thread_locks: dict[str, asyncio.Lock] = {}                    # mỗi cuộc trò chuyện một lượt một lúc
         self._recent: dict[str, deque[float]] = {}                          # thời điểm câu hỏi gần đây theo người
+
+    def _build_members(self, injected: Any) -> dict[str, Member]:
+        cfg = self.ws.agents
+        built: dict[tuple, Any] = {}
+        members: dict[str, Member] = {}
+        for name in ("router", "analyst", "advisor", "designer"):
+            if not getattr(cfg.multi_agent, name).enabled:
+                continue
+            settings = cfg.settings_for(name)
+            ref = resolve_model(cfg, settings.model)
+            self.agent_model_refs[name] = ref
+            if injected is not None:
+                model = injected
+            elif ref.label == self.model_ref.label and settings == self.settings:
+                model = self._model
+            else:                                   # agent cùng model + cùng cấu hình dùng chung một client
+                key = (ref.label, ref.base_url, settings.max_tokens, settings.temperature, settings.timeout_seconds)
+                if key not in built:
+                    built[key] = build_chat_model(ref, settings)
+                model = built[key]
+            members[name] = Member(model=model, caps=ref.capabilities, max_steps=settings.max_steps)
+        return members
 
     @classmethod
     def from_workspace(cls, name_or_path: str | None = None, **kwargs: Any) -> AgentService:
@@ -94,22 +114,32 @@ class AgentService:
 
             mcp_tools, self.mcp_errors = await load_mcp_tools(self.registry, self.audit)
             tools = build_tools(self.registry, self.catalog, audit=self.audit) + mcp_tools
-            self._graph = build_graph(self._model, tools, self.system_prompt_for, self.model_ref.capabilities,
-                                      checkpointer)
+            if self.multi_agent:
+                self._graph = build_team_graph(self._members, tools, self.agent_prompt_for,
+                                               self.ws.agents.multi_agent, checkpointer)
+            else:
+                self._graph = build_graph(self._model, tools, self.system_prompt_for, self.model_ref.capabilities,
+                                          checkpointer)
             self.tool_names = [t.name for t in tools]
             return self._graph
 
     # ------------------------------------------------------------------ prompt
-    def render_system_prompt(self, role: str | None, user_id: str | None = None) -> str:
+    def render_system_prompt(self, role: str | None, user_id: str | None = None,
+                             template: str = "system.md.j2", **extra: Any) -> str:
         sources = [
             {"name": s.name, "kind": s.kind, "dialect": s.dialect, "description": s.description}
             for s in self.registry.for_role(role, user_id)
         ]
-        return self.prompts.render("system.md.j2", role=role or "(chưa xác định)", sources=sources)
+        return self.prompts.render(template, role=role or "(chưa xác định)", sources=sources, **extra)
 
     def system_prompt_for(self, config: RunnableConfig) -> str:
         conf = config.get("configurable") or {}
         return self.render_system_prompt(conf.get("role"), conf.get("user_id"))
+
+    def agent_prompt_for(self, agent: str, config: RunnableConfig, **extra: Any) -> str:
+        """Prompt của một agent chuyên trách: prompts/<agent>.md.j2 (ghi đè được theo workspace)."""
+        conf = config.get("configurable") or {}
+        return self.render_system_prompt(conf.get("role"), conf.get("user_id"), f"{agent}.md.j2", **extra)
 
     # ------------------------------------------------------------------ giới hạn dùng
     def _today(self) -> str:
@@ -142,16 +172,10 @@ class AgentService:
         return None
 
     @staticmethod
-    def _token_usage(messages: list) -> tuple[int, int]:
-        """Tổng token vào/ra của các lượt gọi model trong câu hỏi vừa rồi (với model trả usage_metadata)."""
-        last_human = max((i for i, m in enumerate(messages) if isinstance(m, HumanMessage)), default=-1)
-        t_in = t_out = 0
-        for m in messages[last_human + 1:]:
-            usage = getattr(m, "usage_metadata", None) if isinstance(m, AIMessage) else None
-            if usage:
-                t_in += int(usage.get("input_tokens") or 0)
-                t_out += int(usage.get("output_tokens") or 0)
-        return t_in, t_out
+    def _token_usage(meter: TokenMeter) -> tuple[int, int]:
+        """Tổng token vào/ra của MỌI lượt gọi model trong câu hỏi vừa rồi, của mọi agent (router, analyst,
+        advisor, designer), kể cả lượt không để lại tin nhắn trong lịch sử (với model trả usage_metadata)."""
+        return meter.totals()
 
     def _thread_lock(self, key: str) -> asyncio.Lock:
         lock = self._thread_locks.get(key)
@@ -172,12 +196,15 @@ class AgentService:
             return refused
         graph = await self.ensure_ready()
         key = f"{user_id}:{thread_id}"
+        meter = TokenMeter()
         config: RunnableConfig = {
             "configurable": {"thread_id": key, "role": role, "user_id": user_id},
-            "recursion_limit": self.settings.max_steps * 2 + 1,
+            "recursion_limit": (recursion_limit(self._members) if self.multi_agent
+                                else self.settings.max_steps * 2 + 1),
+            "callbacks": [meter],
         }
         outcome = "ok"
-        tokens = (0, 0)
+        state: dict[str, Any] = {}
         # Cùng một cuộc trò chuyện: xử lý lần lượt (hai lượt song song ghi chồng lịch sử hội thoại).
         # Cả tiến trình: tối đa limits.max_concurrent câu cùng lúc, câu sau chờ tới lượt.
         async with self._thread_lock(key), self._slots:
@@ -192,7 +219,6 @@ class AgentService:
                     if isinstance(msg, AIMessage) and not msg.tool_calls:
                         answer = message_text(msg).strip() or "(không có nội dung)"
                         break
-                tokens = self._token_usage(state["messages"])
                 answer = self._review(answer, state["messages"], user_id)
             except TimeoutError:
                 outcome = "timeout"
@@ -205,11 +231,15 @@ class AgentService:
                 self.audit(user_id, "ask", thread=thread_id, outcome=outcome, error=str(e)[:500])
                 raise
             seconds = round(time.monotonic() - started, 2)
+        # Lượt bị timeout: các lần gọi model đã xong vẫn được tính; lần đang chạy dở thì không đo được.
+        tokens = self._token_usage(meter)
         await asyncio.to_thread(self.store.touch, user_id, thread_id, text[:80])
-        # Lượt bị timeout vẫn tốn token nhưng không đo được: chỉ cộng phần đo được.
         await asyncio.to_thread(self.store.add_usage, self._today(), user_id, *tokens)
+        extra: dict[str, Any] = {}
+        if self.multi_agent:                            # token theo từng agent + đường router đã chọn
+            extra = {"agents": meter.by_agent, "route": state.get("route")}
         self.audit(user_id, "ask", thread=thread_id, outcome=outcome, chars=len(text), seconds=seconds,
-                   tokens_in=tokens[0], tokens_out=tokens[1])
+                   tokens_in=tokens[0], tokens_out=tokens[1], **extra)
         return answer
 
     def _review(self, answer: str, messages: list, user_id: str) -> str:
