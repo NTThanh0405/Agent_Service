@@ -2,6 +2,8 @@
 
 Báo cáo gửi tự động qua **Telegram, Zalo OA, Slack, email** theo lịch, khai báo trong `workspaces/<ten>/reports.yaml`.
 Số liệu lấy bằng **dataset** (`datasets.yaml`), nên khớp với dashboard và Power BI. Phần số liệu không qua AI.
+Muốn gửi ngay khi chỉ số vượt ngưỡng (doanh thu giảm mạnh, tồn kho thấp) thay vì gửi đều đặn: xem
+[ALERTS.md](ALERTS.md).
 
 ```yaml
 reports:

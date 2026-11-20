@@ -40,7 +40,7 @@ Ví dụ: kế toán `telegram:555` role `staff` (không xem gì) cần xem dữ
 
 Đăng nhập web (role trong `grant_roles`). Gồm: trạng thái nguồn dữ liệu và job đồng bộ (nút **Chạy ngay**),
 người dùng (thêm/xoá, đặt mật khẩu web), quyền cấp riêng (cấp/thu hồi), báo cáo định kỳ (**Xem trước**, **Gửi ngay**),
-audit log có lọc. Form chống gửi chéo trang (kiểm tra Origin + cookie SameSite).
+cảnh báo theo ngưỡng (**Kiểm tra ngay**), audit log có lọc. Form chống gửi chéo trang (kiểm tra Origin + cookie SameSite).
 
 ## Giới hạn dùng và chi phí
 
@@ -53,8 +53,15 @@ limits:
   exempt_roles: [admin]       # role không bị giới hạn tần suất / token
 ```
 
-- Token mỗi câu hỏi lấy từ số liệu model báo về (`usage_metadata`), ghi vào audit (`tokens_in`, `tokens_out`) và
-  cộng dồn theo ngày (múi giờ workspace). Trang `/admin` có bảng **Mức dùng hôm nay**. Mức dùng giữ 90 ngày.
+- Token mỗi câu hỏi lấy từ số liệu model báo về (`usage_metadata`) của **mọi** lượt gọi model, ghi vào audit
+  (`tokens_in`, `tokens_out`) và cộng dồn theo ngày (múi giờ workspace). Trang `/admin` có bảng **Mức dùng hôm nay**.
+  Mức dùng giữ 90 ngày. Chế độ nhiều agent ghi thêm token theo từng agent (`agents`) và đường router chọn (`route`),
+  xem [AGENTS.md](AGENTS.md).
+- Báo cáo token **chỉ gửi khi được hỏi**, không nằm trong báo cáo định kỳ: gõ `/token` trong chat (của mình: hôm nay,
+  7 ngày, 30 ngày, hạn mức còn lại); quản trị gõ `/token <id>` hoặc `/token all` (tổng + người dùng nhiều nhất);
+  trên máy chủ: `bizagent usage [--user id|all] [--days 30]`.
+- Nhận xét AI của báo cáo định kỳ (`commentary: true`) cũng tốn token: được cộng vào dòng `report:<tên báo cáo>`
+  trong bảng mức dùng và ghi audit `report_commentary` (không tính vào hạn mức của người nhận).
 - Cùng một cuộc trò chuyện, hai tin nhắn gửi liên tiếp được xử lý lần lượt (không ghi chồng lịch sử).
 - Báo cáo định kỳ dựng một lần cho mỗi nhóm người nhận cùng role và cùng nguồn được xem (truy vấn + nhận xét AI).
 

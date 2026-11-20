@@ -7,12 +7,15 @@
     bizagent chat    [-w ten] [--role admin]   chat trong terminal
     bizagent sync    [-w ten] [job...] [--status] [--due]   đồng bộ dữ liệu về kho DuckDB
     bizagent run     [-w ten] [--host --port]  CHẠY THẬT: web + bot Telegram + tác vụ nền trong một tiến trình
-    bizagent serve   [-w ten] [--host --port]  chỉ web: chat, dashboard sống, Power BI, /admin (+ tác vụ nền)
+    bizagent serve   [-w ten] [--host --port]  chỉ web: dashboard sống, Power BI, /admin, API (+ tác vụ nền)
     bizagent mcp-server [-w ten] [--role manager]  MCP server (stdio) cho Claude Desktop / Cursor...
     bizagent audit   [-w ten] [--user id] [--limit 50]  xem audit log
+    bizagent usage   [-w ten] [--user id|all] [--days 30]  báo cáo mức dùng token (khi cần, không theo lịch)
     bizagent report <ten> [-w ten] [--to id] [--preview]  xem trước / gửi ngay báo cáo định kỳ
+    bizagent alert [ten] [-w ten] [--to id] [--preview] [--force]  danh sách / kiểm tra ngay cảnh báo theo ngưỡng
     bizagent hash-password <ten>   tạo mật khẩu cho tài khoản web
     bizagent powerbi-export [-w ten]           xuất file Parquet/CSV cho Power BI ngay
+    bizagent powerbi-push [-w ten] [--check]   đẩy dữ liệu lên Power BI Service ngay (powerbi.push)
     bizagent telegram [-w ten]     bot Telegram
 
 Workspace: -w <ten hoặc đường dẫn>, hoặc biến BIZAGENT_WORKSPACE, mặc định "demo".
@@ -87,6 +90,22 @@ def cmd_check(args) -> int:
     problems = check_provider_ready(rm)
     print(f"Model: {rm.label} -> {'sẵn sàng' if not problems else '; '.join(problems)}")
     ok &= not problems
+    team = ws.agents.multi_agent
+    agent_prompts = ["system.md.j2"]
+    if team.enabled:                                  # chế độ nhiều agent: model riêng từng agent
+        for name in ("router", "analyst", "advisor", "designer"):
+            if not getattr(team, name).enabled:
+                print(f"Agent {name}: tắt")
+                continue
+            try:
+                arm = resolve_model(ws.agents, ws.agents.settings_for(name).model)
+                problems = check_provider_ready(arm)
+                print(f"Agent {name}: {arm.label} -> {'sẵn sàng' if not problems else '; '.join(problems)}")
+            except Exception as e:
+                problems = [str(e)]
+                print(f"Agent {name}: LỖI: {e}")
+            ok &= not problems
+            agent_prompts.append(f"{name}.md.j2")
 
     reg = SourceRegistry(ws)
     for name, err in reg.errors.items():
@@ -120,6 +139,8 @@ def cmd_check(args) -> int:
         for slug, err in cat.errors.items():
             print(f"Dashboard {slug}: LỖI: {err}")
             ok = False
+        if cat.config.powerbi.enabled and cat.config.powerbi.push:
+            ok &= _check_powerbi_push(ws, reg, cat)
     except Exception as e:
         print(f"Dashboard: LỖI cấu hình: {e}")
         ok = False
@@ -142,32 +163,89 @@ def cmd_check(args) -> int:
         missing = missing_env(zcfg)
         print(f"Kênh Zalo: {'thiếu ' + ', '.join(missing) if missing else 'đủ cấu hình'}")
         ok &= not missing
-    try:                                              # báo cáo có người nhận email -> cần SMTP
-        from bizagent.reports import load_reports, smtp_missing_env
+    def has_email(recipients: list[str]) -> bool:
+        return any(x.startswith("email:") or (x.startswith("role:") and any(
+            u.role == x[5:] and u.id.startswith("email:") for u in ws.users)) for x in recipients)
 
-        users = {u.id: u for u in ws.users}
-        email_reports = [n for n, r in load_reports(ws).reports.items() if r.enabled and any(
-            x.startswith("email:") or (x.startswith("role:") and any(
-                u.role == x[5:] and u.id.startswith("email:") for u in users.values()))
-            for x in r.recipients)]
-        if email_reports:
-            missing = smtp_missing_env()
-            print(f"Email (báo cáo {', '.join(email_reports)}): "
-                  f"{'thiếu ' + ', '.join(missing) if missing else 'đủ cấu hình SMTP'}")
-            ok &= not missing
+    email_users: list[str] = []
+    try:                                              # báo cáo có người nhận email -> cần SMTP
+        from bizagent.reports import load_reports
+
+        email_users += [f"báo cáo {n}" for n, r in load_reports(ws).reports.items()
+                        if r.enabled and has_email(r.recipients)]
     except Exception as e:
         print(f"Báo cáo: LỖI cấu hình: {e}")
         ok = False
+    try:                                              # cảnh báo theo ngưỡng (alerts.yaml)
+        from bizagent.alerts import check_alerts, load_alerts
+
+        alerts = load_alerts(ws).alerts
+        if alerts:
+            try:
+                from bizagent.dashboards.config import DashboardCatalog
+
+                catalog = DashboardCatalog(ws)
+            except Exception:
+                catalog = None                        # lỗi dashboard đã in ở trên
+            problems, notes = check_alerts(ws, catalog)
+            on = [n for n, a in alerts.items() if a.enabled]
+            print(f"Cảnh báo: {len(on)}/{len(alerts)} đang bật"
+                  + "".join(f"\n  {n} ({alerts[n].check.describe()}): {alerts[n].condition}" for n in on))
+            for level, msgs in (("LỖI", problems), ("lưu ý", notes)):
+                for msg in msgs:
+                    name, _, why = msg.partition(": ")
+                    print(f"Cảnh báo {name}: {level}: {why}")
+            ok &= not problems
+            email_users += [f"cảnh báo {n}" for n, a in alerts.items() if a.enabled and has_email(a.recipients)]
+    except Exception as e:
+        print(f"Cảnh báo: LỖI cấu hình: {e}")
+        ok = False
+    if email_users:
+        from bizagent.reports import smtp_missing_env
+
+        missing = smtp_missing_env()
+        print(f"Email ({', '.join(email_users)}): {'thiếu ' + ', '.join(missing) if missing else 'đủ cấu hình SMTP'}")
+        ok &= not missing
     for role in ws.info.roles:
         print(f"Role {role}: nguồn {ws.sources_for_role(role) or '(không có)'}")
     try:
-        PromptEngine(ws).render("system.md.j2", role="admin", sources=[])
-        print("Prompt: OK")
+        engine = PromptEngine(ws)
+        for name in agent_prompts:
+            engine.render(name, role="admin", sources=[], routes=("phan_tich", "tra_cuu", "dashboard"),
+                          route="phan_tich", advisor_follows=True)
+        print(f"Prompt: OK ({', '.join(agent_prompts)})")
     except Exception as e:
         print(f"Prompt: LỖI: {e}")
         ok = False
     print("=> Tất cả OK" if ok else "=> Còn lỗi, xem các dòng trên")
     return 0 if ok else 1
+
+
+def _check_powerbi_push(ws, reg, cat) -> bool:
+    from bizagent.dashboards.engine import DashboardEngine
+    from bizagent.dashboards.powerbi_push import PowerBIPusher, missing_env
+
+    push = cat.config.powerbi.push
+    names = cat.powerbi_push_datasets()
+    head = f"Power BI push ({push.mode}, mỗi {push.every}, {len(names)} dataset)"
+    missing = missing_env()
+    if missing:
+        print(f"{head}: thiếu {', '.join(missing)} trong .env")
+        return False
+    if not names:
+        print(f"{head}: LỖI: chưa có dataset nào (powerbi.push.datasets hoặc powerbi.datasets)")
+        return False
+    try:
+        pusher = PowerBIPusher(DashboardEngine(reg, cat))
+        try:
+            status = pusher.check()
+        finally:
+            pusher.close()
+    except Exception as e:
+        print(f"{head}: LỖI: {e}")
+        return False
+    print(f"{head}: kết nối workspace {push.workspace_id} OK, {status}")
+    return True
 
 
 def cmd_prompt(args) -> int:
@@ -179,7 +257,10 @@ def cmd_prompt(args) -> int:
     reg = SourceRegistry(ws)
     sources = [{"name": s.name, "kind": s.kind, "dialect": s.dialect, "description": s.description}
                for s in reg.for_role(args.role)]
-    print(PromptEngine(ws).render("system.md.j2", role=args.role, sources=sources))
+    template = f"{args.agent}.md.j2" if args.agent else "system.md.j2"
+    print(PromptEngine(ws).render(template, role=args.role, sources=sources,
+                                  routes=("phan_tich", "tra_cuu", "dashboard"), route="phan_tich",
+                                  advisor_follows=True))
     reg.close()
     return 0
 
@@ -266,8 +347,9 @@ def cmd_serve(args) -> int:
 
 
 def cmd_run(args) -> int:
-    """Một tiến trình cho tất cả: web (chat, dashboard, Power BI, /admin, webhook Zalo/Slack) + bot Telegram
-    (nếu có TELEGRAM_BOT_TOKEN) + tác vụ nền (đồng bộ, báo cáo, xuất Power BI). Dùng cho Windows Service và Docker."""
+    """Một tiến trình cho tất cả: web (dashboard, Power BI, /admin, API, webhook Zalo/Slack) + bot Telegram
+    (nếu có TELEGRAM_BOT_TOKEN) + tác vụ nền (đồng bộ, báo cáo, cảnh báo, xuất/đẩy Power BI).
+    Dùng cho Windows Service và Docker."""
     args.with_telegram = bool(os.environ.get("TELEGRAM_BOT_TOKEN")) and not args.no_telegram
     if args.with_telegram:
         try:
@@ -299,7 +381,7 @@ def cmd_sync(args) -> int:
                 if not s:
                     print(f"{name:24} -> {job.table:24} chưa chạy")
                     continue
-                last = s["last_success"].astimezone().strftime("%Y-%m-%d %H:%M") if s["last_success"] else "-"
+                last = ws.local_time(s["last_success"]).strftime("%Y-%m-%d %H:%M") if s["last_success"] else "-"
                 err = f"  lỗi: {s['error']}" if s["status"] != "ok" else ""
                 print(f"{name:24} -> {s['table_name']:24} {s['status']:5} {s['rows'] or 0:>8} dòng  "
                       f"thành công lần cuối {last}{err}")
@@ -360,6 +442,39 @@ def cmd_powerbi_export(args) -> int:
         reg.close()
 
 
+def cmd_powerbi_push(args) -> int:
+    from bizagent.dashboards.config import DashboardCatalog
+    from bizagent.dashboards.engine import DashboardEngine
+    from bizagent.dashboards.powerbi_push import PowerBIPusher
+    from bizagent.sources.registry import SourceRegistry
+    from bizagent.workspace import load_workspace
+
+    ws = load_workspace(args.workspace)
+    reg = SourceRegistry(ws)
+    try:
+        cat = DashboardCatalog(ws)
+        if not cat.config.powerbi.enabled or cat.config.powerbi.push is None:
+            print("Chưa bật: cần powerbi.enabled: true và powerbi.push trong dashboards.yaml (xem docs/DASHBOARDS.md)")
+            return 1
+        pusher = PowerBIPusher(DashboardEngine(reg, cat))
+        try:
+            if args.check:
+                print(f"Power BI: {pusher.check()}")
+                return 0
+            results = pusher.push_all()
+        finally:
+            pusher.close()
+        for name, status in results.items():
+            print(f"{name}: {status}")
+        print(f"Model: {pusher.model} · workspace {pusher.cfg.workspace_id}")
+        return 0 if results and all(s.startswith("ok") for s in results.values()) else 1
+    except Exception as e:
+        print(f"Lỗi: {e}")
+        return 1
+    finally:
+        reg.close()
+
+
 def cmd_mcp_server(args) -> int:
     from bizagent.mcp_server import build_server
     from bizagent.workspace import load_workspace
@@ -380,12 +495,45 @@ def cmd_audit(args) -> int:
     from bizagent.state import StateStore
     from bizagent.workspace import load_workspace
 
-    store = StateStore.for_workspace(load_workspace(args.workspace))
+    ws = load_workspace(args.workspace)
+    store = StateStore.for_workspace(ws)
     for r in reversed(store.audit_rows(limit=args.limit, user_id=args.user)):
         detail = json.dumps(r["detail"], ensure_ascii=False)
-        print(f"{r['ts']:%Y-%m-%d %H:%M:%S} UTC  {r['user_id']:24} {r['kind']:16} {detail[:160]}")
+        print(f"{ws.local_time(r['ts']):%Y-%m-%d %H:%M:%S}  {r['user_id']:24} {r['kind']:16} {detail[:160]}")
     store.close()
     return 0
+
+
+def cmd_usage(args) -> int:
+    """Báo cáo mức dùng token khi được hỏi (không nằm trong báo cáo định kỳ)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from bizagent.state import StateStore
+    from bizagent.usage import UsageError, usage_report, usage_rows
+    from bizagent.workspace import load_workspace
+
+    ws = load_workspace(args.workspace)
+    store = StateStore.for_workspace(ws)
+    today = datetime.now(ZoneInfo(ws.info.timezone)).date()
+    try:
+        if args.user:
+            admin_role = ws.info.admin_roles[0] if ws.info.admin_roles else None   # người chạy CLI là quản trị máy chủ
+            print(usage_report(ws, store, today, ("cli:local", admin_role), [args.user]))
+            return 0
+        rows = usage_rows(store, today, args.days)
+        print(f"Mức dùng token {args.days} ngày gần nhất (tới {today:%d/%m/%Y}):")
+        for r in rows:
+            print(f"{r['user']:32} {r['asks']:>6} lượt  vào {r['tokens_in']:>12,}  ra {r['tokens_out']:>10,}  "
+                  f"tổng {r['tokens_in'] + r['tokens_out']:>12,}")
+        if not rows:
+            print("(chưa có lượt dùng nào)")
+        return 0
+    except UsageError as e:
+        print(e)
+        return 1
+    finally:
+        store.close()
 
 
 def cmd_report(args) -> int:
@@ -408,6 +556,62 @@ def cmd_report(args) -> int:
             for uid, status in (await runner.send_now(args.name, targets)).items():
                 print(f"{uid}: {status}")
             return 0
+        finally:
+            await service.aclose()
+
+    result: list[int] = []
+
+    async def wrapper() -> None:
+        result.append(await run())
+
+    _run_async(wrapper())
+    return result[0]
+
+
+def cmd_alert(args) -> int:
+    from bizagent.alerts import AlertRunner
+    from bizagent.reports import fmt
+
+    service = _service(args)
+
+    async def run() -> int:
+        try:
+            runner = AlertRunner(service)
+            alerts = runner.config.alerts
+            if not args.name:
+                if not alerts:
+                    print(f"Workspace {service.ws.name} chưa có alerts.yaml (hoặc chưa có cảnh báo)")
+                    return 1
+                for name, spec in alerts.items():
+                    last = runner.last_check(name)
+                    when = last.get("at", "")[:16].replace("T", " ")
+                    print(f"{name:24} {'bật' if spec.enabled else 'tắt':4} {spec.check.describe():24} "
+                          f"{spec.condition}\n{'':24} lần cuối: {when + ' UTC — ' + last['summary'] if when else '-'}")
+                return 0
+            if args.name not in alerts:
+                print(f"Không có cảnh báo '{args.name}'. Có: {list(alerts)}")
+                return 1
+            only = [args.to] if args.to else None
+            if args.preview:
+                res = await runner.check(args.name, send=False, force=args.force, only=only)
+            else:
+                res = await runner.check_and_record(args.name, force=args.force, only=only)
+            r = res.result
+            print(f"{args.name}: {res.summary()}")
+            if r is not None:
+                cur = r.current
+                if cur is not None and not r.multi:
+                    spec = runner.config.alerts[args.name]
+                    kind = "percent" if spec.cond.is_pct else spec.format
+                    print(f"Kỳ {r.period_label}: giá trị {fmt(cur.value, kind)}, ngưỡng {fmt(cur.threshold, kind)}")
+                else:
+                    print(f"Kỳ {r.period_label}: {len(r.matches)}/{r.total_rows} dòng vượt ngưỡng")
+            for uid, status in res.status.items():
+                print(f"  {uid}: {status}")
+            if args.preview:
+                for uid, text in res.messages.items():
+                    print(f"\n===== {uid}\n{text}")
+            return 1 if res.error or any(s.startswith("lỗi") for s in res.status.values()) else 0
         finally:
             await service.aclose()
 
@@ -455,6 +659,9 @@ def build_parser() -> argparse.ArgumentParser:
         sp = sub.add_parser(name, help=help_)
         ws_arg(sp)
         sp.add_argument("--role", default="admin")
+        if name == "prompt":
+            sp.add_argument("--agent", choices=["router", "analyst", "advisor", "designer"],
+                            help="in prompt của một agent trong chế độ nhiều agent")
         sp.set_defaults(func=func)
 
     sp = sub.add_parser("sync", help="đồng bộ dữ liệu về kho (sync.yaml)")
@@ -472,6 +679,11 @@ def build_parser() -> argparse.ArgumentParser:
     ws_arg(sp)
     sp.set_defaults(func=cmd_powerbi_export)
 
+    sp = sub.add_parser("powerbi-push", help="đẩy dữ liệu lên Power BI Service ngay (powerbi.push)")
+    ws_arg(sp)
+    sp.add_argument("--check", action="store_true", help="chỉ kiểm tra token và quyền vào workspace, không đẩy")
+    sp.set_defaults(func=cmd_powerbi_push)
+
     sp = sub.add_parser("mcp-server", help="mở dữ liệu workspace thành MCP server (stdio) cho Claude Desktop...")
     ws_arg(sp)
     sp.add_argument("--role", default=os.environ.get("BIZAGENT_MCP_ROLE", "manager"))
@@ -484,13 +696,26 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--preview", action="store_true", help="chỉ in nội dung, không gửi")
     sp.set_defaults(func=cmd_report)
 
+    sp = sub.add_parser("alert", help="danh sách / kiểm tra ngay cảnh báo theo ngưỡng (alerts.yaml)")
+    ws_arg(sp)
+    sp.add_argument("name", nargs="?", default=None, help="tên cảnh báo; bỏ trống = liệt kê")
+    sp.add_argument("--to", default=None, help="chỉ xét một người nhận (vd telegram:123)")
+    sp.add_argument("--preview", action="store_true", help="chỉ kiểm tra và in nội dung, không gửi")
+    sp.add_argument("--force", action="store_true", help="gửi cả khi đã gửi trong kỳ này (bỏ qua chống gửi lặp)")
+    sp.set_defaults(func=cmd_alert)
+
     sp = sub.add_parser("audit", help="xem audit log")
     ws_arg(sp)
     sp.add_argument("--user", default=None)
     sp.add_argument("--limit", type=int, default=50)
     sp.set_defaults(func=cmd_audit)
+    sp = sub.add_parser("usage", help="báo cáo mức dùng token (khi cần xem, không gửi theo lịch)")
+    ws_arg(sp)
+    sp.add_argument("--user", default=None, help="một người: telegram:123, report:bao_cao_sang... hoặc all")
+    sp.add_argument("--days", type=int, default=30)
+    sp.set_defaults(func=cmd_usage)
 
-    for name, func, help_ in (("serve", cmd_serve, "web: chat, dashboard, Power BI, /admin"),
+    for name, func, help_ in (("serve", cmd_serve, "web: dashboard, Power BI, /admin, API"),
                               ("run", cmd_run, "chạy tất cả trong một tiến trình: web + bot Telegram + tác vụ nền")):
         sp = sub.add_parser(name, help=help_)
         ws_arg(sp)

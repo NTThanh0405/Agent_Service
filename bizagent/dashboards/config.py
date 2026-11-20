@@ -139,12 +139,45 @@ class PowerBIExport(_Strict):
     dir: str = "data/powerbi"
 
 
+GUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+class PowerBIPush(_Strict):
+    """Tự đẩy dữ liệu lên Power BI Service (push semantic model qua REST API). Xem docs/DASHBOARDS.md."""
+
+    every: str = "1h"                               # 30m, 1h, 1d
+    workspace_id: str                               # ID workspace Power BI (GUID trong URL .../groups/<id>/...)
+    model: str = ""                                 # tên semantic model trên Power BI; trống = "bizagent <workspace>"
+    datasets: list[str] = Field(default_factory=list)   # trống = như powerbi.datasets; "*" = tất cả
+    mode: Literal["replace", "append"] = "replace"  # replace: xoá dòng cũ rồi đẩy lại; append: chỉ thêm dòng
+    period: str | None = None                       # kỳ cho {{start}}/{{end}}; trống = powerbi.default_period
+    retention: Literal["none", "basicFIFO"] = "none"    # basicFIFO: Power BI giữ 200.000 dòng mới nhất mỗi bảng
+    batch_rows: int = 10_000                        # số dòng mỗi request (Power BI cho tối đa 10.000)
+    timeout_seconds: float = 60
+    authority: str = "https://login.microsoftonline.com"   # đổi cho cloud riêng (Gov/China)
+    api_url: str = "https://api.powerbi.com"
+
+    @field_validator("workspace_id")
+    @classmethod
+    def _guid(cls, v: str) -> str:
+        v = v.strip()
+        if not GUID.match(v):
+            raise ValueError("powerbi.push.workspace_id phải là GUID của workspace Power BI (không dùng My Workspace)")
+        return v.lower()
+
+    @field_validator("batch_rows")
+    @classmethod
+    def _batch(cls, v: int) -> int:
+        return max(1, min(10_000, v))
+
+
 class PowerBIConfig(_Strict):
     enabled: bool = False
     datasets: list[str] = Field(default_factory=list)   # dataset đưa sang Power BI ("*" = tất cả)
     max_rows: int = 1_000_000
     default_period: str = "365 ngày qua"            # cho dataset có {{start}}/{{end}}; đổi bằng ?period=... trên URL
     export: PowerBIExport | None = None
+    push: PowerBIPush | None = None
     reports: dict[str, PowerBIReport] = Field(default_factory=dict)  # báo cáo Power BI có sẵn để agent gửi link
 
 
@@ -223,6 +256,14 @@ class DashboardCatalog:
         for name in self.config.powerbi.datasets:
             if name != "*" and name not in self.datasets:
                 raise WorkspaceError(f"dashboards.yaml: powerbi.datasets có '{name}' không có trong datasets.yaml")
+        push = self.config.powerbi.push
+        if push is not None:
+            for name in push.datasets:
+                if name != "*" and name not in self.datasets:
+                    raise WorkspaceError(f"dashboards.yaml: powerbi.push.datasets có '{name}' không có trong "
+                                         "datasets.yaml")
+            if len(self.powerbi_push_datasets()) > 75:
+                raise WorkspaceError("powerbi.push: Power BI cho tối đa 75 bảng trong một semantic model")
 
     def _check_dataset(self, name: str, ds: DatasetSpec) -> None:
         if ds.source not in self.ws.sources:
@@ -256,6 +297,14 @@ class DashboardCatalog:
     def powerbi_datasets(self) -> list[str]:
         names = self.config.powerbi.datasets
         return list(self.datasets) if "*" in names else list(names)
+
+    def powerbi_push_datasets(self) -> list[str]:
+        push = self.config.powerbi.push
+        if push is None:
+            return []
+        if not push.datasets:
+            return self.powerbi_datasets()
+        return list(self.datasets) if "*" in push.datasets else list(dict.fromkeys(push.datasets))
 
     def sources_of(self, spec: DashboardSpec) -> set[str]:
         names = {w.dataset for w in spec.widgets if w.dataset}

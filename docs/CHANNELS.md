@@ -2,7 +2,7 @@
 
 ## Phiên trò chuyện lưu trong database
 
-Mọi kênh (web, Telegram, Zalo, terminal) lưu hội thoại vào **state DB** của workspace, nên khởi động lại server
+Mọi kênh (Telegram, Zalo, Slack, terminal, REST API) lưu hội thoại vào **state DB** của workspace, nên khởi động lại server
 agent vẫn nhớ ngữ cảnh. Mặc định là SQLite trong `workspaces/<ten>/data/`. Muốn dùng PostgreSQL:
 
 ```yaml
@@ -25,6 +25,7 @@ Lệnh dùng chung trên Telegram, Zalo và terminal (xử lý bằng code, khô
 | `/sessions` | 10 cuộc gần nhất |
 | `/chon <số>` | Chuyển sang cuộc khác |
 | `/login` | Link đăng nhập dashboard (24 giờ) |
+| `/token` | Mức dùng token của mình: hôm nay, 7 ngày, 30 ngày, hạn mức còn lại. Quản trị: `/token <id>`, `/token all` |
 | `/myid` | Xem ID để gửi quản trị viên (người lạ cũng dùng được) |
 
 ## Audit log

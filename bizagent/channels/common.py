@@ -7,7 +7,7 @@ import asyncio
 from bizagent.agent.service import AgentService
 
 HELP = ("Lệnh: /new cuộc trò chuyện mới · /sessions danh sách cuộc trò chuyện · /chon <số> chuyển cuộc · "
-        "/login link mở dashboard · /myid xem ID")
+        "/login link mở dashboard · /token mức dùng token · /myid xem ID")
 
 
 def split_text(text: str, limit: int) -> list[str]:
@@ -58,9 +58,10 @@ async def handle_command(service: AgentService, user_id: str, role: str, text: s
         rows = await asyncio.to_thread(store.list_threads, user_id)
         if not rows:
             return "Chưa có cuộc trò chuyện nào."
-        lines = [f"{i}. {r['title'] or '(chưa có câu hỏi)'} — {r['updated_at']:%d/%m %H:%M}"
+        ws = service.ws
+        lines = [f"{i}. {r['title'] or '(chưa có câu hỏi)'} — {ws.local_time(r['updated_at']):%d/%m %H:%M}"
                  + (" ← đang dùng" if i == 1 else "") for i, r in enumerate(rows[:10], 1)]
-        return "Cuộc trò chuyện gần đây (UTC):\n" + "\n".join(lines) + "\n\nGõ /chon <số> để chuyển."
+        return "Cuộc trò chuyện gần đây:\n" + "\n".join(lines) + "\n\nGõ /chon <số> để chuyển."
     if cmd == "/chon":
         rows = await asyncio.to_thread(store.list_threads, user_id)
         if len(parts) < 2 or not parts[1].isdigit() or not 1 <= int(parts[1]) <= min(len(rows), 10):
@@ -70,6 +71,16 @@ async def handle_command(service: AgentService, user_id: str, role: str, text: s
         return f"Đã chuyển sang: {r['title'] or '(chưa có câu hỏi)'}"
     if cmd == "/login":
         return login_message(service, user_id, role)
+    if cmd in ("/token", "/mucdung"):              # báo cáo token: chỉ khi được hỏi, không gửi theo lịch
+        from datetime import date
+
+        from bizagent.usage import UsageError, usage_report
+
+        try:
+            return await asyncio.to_thread(usage_report, service.ws, store, date.fromisoformat(service._today()),
+                                           (user_id, role), parts[1:])
+        except UsageError as e:
+            return f"Không thực hiện được: {e}"
     if cmd in ADMIN_COMMANDS:
         return await asyncio.to_thread(_admin_command, service, user_id, role, cmd, parts[1:])
     return None
@@ -77,7 +88,7 @@ async def handle_command(service: AgentService, user_id: str, role: str, text: s
 
 ADMIN_COMMANDS = {"/users", "/adduser", "/removeuser", "/capquyen", "/thuhoi", "/quyen"}
 ADMIN_HELP = ("Quản trị: /users · /adduser <id> <role> [tên] · /removeuser <id> · "
-              "/capquyen <id> <nguồn> [số giờ] · /thuhoi <id> <nguồn|all> · /quyen [id]")
+              "/capquyen <id> <nguồn> [số giờ] · /thuhoi <id> <nguồn|all> · /quyen [id] · /token <id|all>")
 
 
 def _admin_command(service: AgentService, user_id: str, role: str, cmd: str, args: list[str]) -> str:
@@ -108,7 +119,7 @@ def _admin_command(service: AgentService, user_id: str, role: str, cmd: str, arg
                 return "Cách dùng: /capquyen <id> <nguồn> [số giờ]"
             hours = float(args[2]) if len(args) > 2 else None
             uid, exp = access.grant(ws, store, actor, args[0], args[1], hours)
-            until = f"đến {exp:%d/%m/%Y %H:%M} UTC" if exp else "không thời hạn"
+            until = f"đến {ws.local_time(exp):%d/%m/%Y %H:%M}" if exp else "không thời hạn"
             return f"Đã cấp nguồn {args[1]} cho {uid} ({until})"
         if cmd == "/thuhoi":
             if len(args) < 2:

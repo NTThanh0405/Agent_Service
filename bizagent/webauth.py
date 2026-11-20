@@ -1,4 +1,4 @@
-"""Đăng nhập cho trang web (dashboard, Power BI, chat web).
+"""Đăng nhập cho trang web (dashboard, Power BI, /admin) và REST API.
 
 Cách xác thực được chấp nhận:
 1. Cookie phiên sau khi đăng nhập bằng tài khoản web (users.yaml: id "web:<ten>", password_hash).

@@ -112,7 +112,7 @@ def describe_user(ws: Workspace, store: StateStore, user_id: str) -> str:
     if grants:
         lines.append("Cấp riêng:")
         for g in grants:
-            until = f"hết hạn {g['expires_at']:%d/%m %H:%M} UTC" if g["expires_at"] else "không hết hạn"
+            until = f"hết hạn {ws.local_time(g['expires_at']):%d/%m %H:%M}" if g["expires_at"] else "không hết hạn"
             lines.append(f"  • {g['source']} ({until}, cấp bởi {g['granted_by']})")
     return "\n".join(lines)
 

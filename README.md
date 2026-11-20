@@ -47,16 +47,16 @@ Mục lục: [Dùng cho ai](#dùng-cho-ai-chọn-cách-triển-khai) · [Tính n
 | **Dữ liệu** | PostgreSQL, MySQL/MariaDB, SQL Server, SQLite, Oracle… · REST API khai báo bằng YAML (Base.vn, iPOS, MISA…) · Google Sheets · file CSV/Excel · MCP server · kho DuckDB đồng bộ theo lịch để ghép dữ liệu nhiều nguồn |
 | **Model AI** | Claude, ChatGPT, Gemini, DeepSeek, Ollama (chạy trên máy), mọi API tương thích OpenAI — đổi bằng một dòng |
 | **Tuỳ chỉnh theo doanh nghiệp** | Mỗi doanh nghiệp một thư mục *workspace*: prompt (Jinja2), định nghĩa chỉ số, SQL mẫu, phân quyền |
-| **Kênh** | Trang chat web, REST API, Telegram, Zalo OA, Slack, terminal, Claude Desktop/Cursor (MCP) · báo cáo định kỳ qua cả email |
-| **Dashboard** | Dashboard sống viết bằng YAML/SQL/JS, tự làm mới, không hết hạn, agent tạo được bằng lời · hoặc đưa dữ liệu sang **Power BI** |
-| **Vận hành** | Báo cáo định kỳ · trang quản trị `/admin` · cấp quyền theo người có hạn dùng · audit log · phiên chat lưu DB |
+| **Kênh** | Telegram, Zalo OA, Slack, terminal, Claude Desktop/Cursor (MCP), REST API cho phần mềm khác · báo cáo định kỳ qua cả email · web dành cho dashboard, Power BI, `/admin` |
+| **Dashboard** | Dashboard sống viết bằng YAML/SQL/JS, tự làm mới, không hết hạn, agent tạo được bằng lời · hoặc đưa dữ liệu sang **Power BI** (Power BI kéo qua web connector/file, hoặc bizagent tự đẩy lên Power BI Service theo lịch) |
+| **Vận hành** | Báo cáo định kỳ · cảnh báo theo ngưỡng (doanh thu giảm, tồn kho thấp…) gửi ngay qua Telegram/Zalo/Slack/email · trang quản trị `/admin` · cấp quyền theo người có hạn dùng · audit log · phiên chat lưu DB |
 | **An toàn** | Chỉ cho `SELECT` (kiểm tra theo từng loại database) · phiên DB chỉ-đọc · che cột cá nhân · reviewer đối chiếu mọi con số trong câu trả lời với dữ liệu |
 
 ---
 
 ## Cách bizagent hoạt động
 
-Mọi kênh (web, Telegram, Zalo, Slack, terminal, REST API) đi qua một điểm vào là `AgentService.ask()`:
+Mọi kênh (Telegram, Zalo, Slack, terminal, REST API) đi qua một điểm vào là `AgentService.ask()`:
 
 1. **Kênh nhận tin** và xác định người hỏi (`telegram:<id>`, `zalo:<id>`, `slack:<id>`, `web:<tên>`, `api:token`).
 2. **Tra role** trong `users.yaml` hoặc state DB. Người lạ bị bỏ qua (chỉ `/myid` được trả lời).
@@ -65,12 +65,16 @@ Mọi kênh (web, Telegram, Zalo, Slack, terminal, REST API) đi qua một đi�
 5. **Ghép system prompt**: thông tin doanh nghiệp, ngày hôm nay, role, *chỉ các nguồn người này được xem*, `knowledge/*.md`.
 6. **Vòng agent ↔ tool (LangGraph)**: `get_date_range` (đổi "tuần này" ra ngày bằng code) → `list_tables` /
    `describe_table` → `run_sql` / `call_api` → (tuỳ chọn) `list_dashboards` / `create_dashboard`, tool MCP.
+   Bật `multi_agent` trong `agents.yaml` để tách thành nhiều agent chuyên trách: **router** chọn đường → **analyst**
+   lấy số liệu → **advisor** viết đánh giá và đề xuất chỉ dựa trên số liệu đó; **designer** lo dashboard
+   ([docs/AGENTS.md](docs/AGENTS.md)).
 7. **Mỗi câu SQL**: kiểm tra quyền nguồn ở server → guard chỉ-SELECT + allowlist bảng → viết lại SQL để che cột cá nhân →
    phiên DB chỉ-đọc, giới hạn dòng, huỷ khi quá giờ → ghi audit.
 8. **Reviewer** đối chiếu con số trong câu trả lời với dữ liệu vừa truy vấn; lưu lịch sử, mức dùng, audit; trả lời về kênh.
 
 Chạy nền trong cùng tiến trình (`bizagent run`): **đồng bộ** nguồn → kho DuckDB (`sync.yaml`), **báo cáo định kỳ**
-(`reports.yaml`, kiểm tra lịch mỗi phút), **xuất Power BI** (`powerbi.export`), **dọn** phiên chat/audit cũ mỗi giờ.
+(`reports.yaml`, kiểm tra lịch mỗi phút), **cảnh báo theo ngưỡng** (`alerts.yaml`), **xuất Power BI** (`powerbi.export`),
+**tự đẩy dữ liệu lên Power BI Service** (`powerbi.push`), **dọn** phiên chat/audit cũ mỗi giờ.
 
 ---
 
@@ -112,8 +116,17 @@ bizagent check
 bizagent run
 ```
 
-Mở http://127.0.0.1:8000 (chat) · `/dashboards` · `/powerbi` · `/admin`. Trên máy cá nhân chưa đặt mật khẩu thì
-tự đăng nhập quyền admin. Thử hỏi: *"tháng này mỗi cửa hàng đạt bao nhiêu % mục tiêu?"*
+Mở http://127.0.0.1:8000/dashboards · `/powerbi` · `/admin`. Trên máy cá nhân chưa đặt mật khẩu thì
+tự đăng nhập quyền admin.
+
+Hỏi agent qua **Telegram / Zalo / Slack** (xem [Kết nối kênh chat](#kết-nối-kênh-chat-và-email)); muốn thử ngay chưa
+cần bot thì hỏi trong terminal (mở cửa sổ khác, kích hoạt venv):
+
+```bash
+bizagent chat
+```
+
+Thử hỏi: *"tháng này mỗi cửa hàng đạt bao nhiêu % mục tiêu?"*
 
 ---
 
@@ -271,7 +284,7 @@ Mọi thứ riêng của một doanh nghiệp nằm trong **một thư mục wor
 workspaces/cong_ty_a/
 ├── workspace.yaml    tên, ngôn ngữ, múi giờ, tiền tệ, role → nguồn được xem, ai được quản trị
 ├── sources.yaml      database / API / Google Sheets / file / MCP (mật khẩu dùng ${BIEN}, đặt trong .env)
-├── agents.yaml       model AI, số bước, timeout, reviewer
+├── agents.yaml       model AI, số bước, timeout, reviewer, chế độ nhiều agent
 ├── knowledge/*.md    định nghĩa chỉ số, bối cảnh kinh doanh, SQL mẫu → ghép vào prompt
 ├── prompts/          ghi đè prompt lõi (Jinja2)
 ├── datasets.yaml     truy vấn dùng chung cho dashboard, Power BI, báo cáo
@@ -279,6 +292,7 @@ workspaces/cong_ty_a/
 ├── dashboards/       mỗi dashboard một file YAML (+ JS cho widget tuỳ chỉnh)
 ├── sync.yaml         lịch đồng bộ nguồn → kho DuckDB
 ├── reports.yaml      báo cáo định kỳ
+├── alerts.yaml       cảnh báo theo ngưỡng (KPI vượt ngưỡng → gửi ngay)
 ├── channels.yaml     bật Zalo OA, Slack
 ├── users.yaml        người dùng và role (không commit)
 ├── .env              bí mật riêng của workspace (không commit)
@@ -313,9 +327,11 @@ default_model: anthropic:claude-sonnet-5-5   # hoặc openai:<model>, google_gen
 | [docs/CONNECTORS.md](docs/CONNECTORS.md) | Database, REST API (Base.vn, iPOS, MISA), Google Sheets, CSV/Excel, kho DuckDB và đồng bộ |
 | [docs/DASHBOARDS.md](docs/DASHBOARDS.md) | Dashboard sống, Power BI, đăng nhập web |
 | [docs/REPORTS.md](docs/REPORTS.md) | Báo cáo định kỳ qua Telegram/Zalo/Slack |
+| [docs/ALERTS.md](docs/ALERTS.md) | Cảnh báo theo ngưỡng: điều kiện, lịch kiểm tra, chống gửi lặp |
 | [docs/CHANNELS.md](docs/CHANNELS.md) | Telegram, Zalo OA, phiên chat, audit |
 | [docs/MCP.md](docs/MCP.md) | Dùng MCP server làm nguồn; mở dữ liệu cho Claude Desktop/Cursor |
 | [docs/ADMIN.md](docs/ADMIN.md) | Người dùng, cấp quyền có hạn dùng, trang `/admin`, reviewer |
+| [docs/AGENTS.md](docs/AGENTS.md) | Nhiều agent chuyên trách: router, analyst, advisor (đánh giá, đề xuất), designer |
 | `workspaces/_template/` | Mẫu có chú thích cho từng file |
 
 ---
@@ -359,8 +375,8 @@ Trước khi đưa ra Internet:
 - [ ] Tài khoản database **chỉ có quyền SELECT**, không đọc được cột cá nhân nếu có thể (lớp bảo vệ quan trọng nhất).
 - [ ] `.env` có `BIZAGENT_SECRET_KEY` và `BIZAGENT_API_TOKEN` (trình cài tự sinh); không commit `.env`, `users.yaml`.
 - [ ] Chỉ mở qua HTTPS (Cloudflare Tunnel / Caddy / IIS), đặt `BIZAGENT_PUBLIC_URL` bắt đầu bằng `https://`.
-- [ ] Tạo tài khoản web có mật khẩu (`bizagent hash-password <ten>` hoặc trang `/admin`); khi đã có tài khoản web,
-      trang chat yêu cầu đăng nhập.
+- [ ] Tạo tài khoản web có mật khẩu cho người xem dashboard / Power BI / `/admin` (`bizagent hash-password <ten>`
+      hoặc trang `/admin`); người dùng Telegram đăng nhập dashboard bằng lệnh `/login`.
 - [ ] `allowed_tables` (SQL), `operations` (API), `allowed_tools` (MCP) chỉ gồm thứ agent cần đọc.
 - [ ] Bật `reviewer` trong `agents.yaml` để gắn cờ con số không đối chiếu được với dữ liệu.
 
@@ -376,23 +392,26 @@ lần; đăng xuất thu hồi mọi phiên của người đó. `/api/v1/health
 | Lệnh | Việc |
 |---|---|
 | `bizagent run` | **Chạy thật**: web + bot Telegram (nếu có token) + tác vụ nền, một tiến trình |
-| `bizagent serve` | Chỉ web (chat, dashboard, Power BI, `/admin`, webhook Zalo/Slack) |
+| `bizagent serve` | Chỉ web (dashboard, Power BI, `/admin`, REST API, webhook Zalo/Slack) |
 | `bizagent telegram` | Chỉ bot Telegram |
 | `bizagent chat` | Chat trong terminal |
-| `bizagent check` | Kiểm tra model, nguồn dữ liệu, đồng bộ, dashboard, kênh |
+| `bizagent check` | Kiểm tra model, nguồn dữ liệu, đồng bộ, dashboard, Power BI push, kênh |
 | `bizagent init <ten>` | Tạo workspace từ mẫu |
-| `bizagent prompt` | In system prompt đã ghép |
+| `bizagent prompt` | In system prompt đã ghép (`--agent advisor`: prompt từng agent khi bật nhiều agent) |
 | `bizagent sync [job] [--status]` | Đồng bộ dữ liệu về kho |
 | `bizagent report <ten> [--preview] [--to id]` | Xem trước / gửi ngay báo cáo |
+| `bizagent alert [ten] [--preview] [--to id]` | Danh sách / kiểm tra ngay cảnh báo theo ngưỡng |
 | `bizagent powerbi-export` | Xuất file Parquet/CSV cho Power BI |
+| `bizagent powerbi-push [--check]` | Đẩy dữ liệu lên Power BI Service ngay (service principal, `powerbi.push`) |
 | `bizagent audit [--user id]` | Xem audit log |
+| `bizagent usage [--user id\|all] [--days 30]` | Báo cáo mức dùng token (chỉ khi cần xem; trong chat gõ `/token`) |
 | `bizagent hash-password <ten>` | Tạo mật khẩu tài khoản web |
 | `bizagent mcp-server --role manager` | MCP server cho Claude Desktop / Cursor |
 | `bizagent seed-demo` | Tạo dữ liệu mẫu cho workspace demo |
 
 Mọi lệnh nhận `-w <workspace>` (mặc định lấy `BIZAGENT_WORKSPACE`, rồi `demo`).
 Chạy nhiều tiến trình cho cùng một workspace (vd `serve` và `telegram` riêng): đặt `BIZAGENT_BACKGROUND_TASKS=0`
-cho mọi tiến trình trừ một, để báo cáo không bị gửi trùng. Dùng `bizagent run` thì không cần.
+cho mọi tiến trình trừ một, để báo cáo và cảnh báo không bị gửi trùng. Dùng `bizagent run` thì không cần.
 
 ---
 
@@ -420,14 +439,15 @@ prompt, và chỉ ra dòng nào lỗi. Bảng đầy đủ hơn nằm trong bả
 
 ```
 bizagent/
-├── agent/          AgentService (điểm vào cho mọi kênh), graph LangGraph, tool của agent
+├── agent/          AgentService (điểm vào cho mọi kênh), graph một agent / nhiều agent (team.py), tool, đếm token
 ├── llm/            "provider:model" → chat model, bảng năng lực từng model
 ├── prompts/        prompt lõi + engine ghi đè theo workspace
 ├── sources/        nguồn dữ liệu: sql, rest, google_sheets, files, warehouse, mcp
 ├── security/       kiểm tra chỉ-SELECT theo dialect, che dữ liệu cá nhân
 ├── dashboards/     dataset, dashboard sống, Power BI
-├── channels/       web (chat, dashboard, /admin), Telegram, Zalo, Slack, lệnh chung
+├── channels/       web (dashboard, /admin, REST API), Telegram, Zalo, Slack, lệnh chung
 ├── reports.py      báo cáo định kỳ          sync.py      đồng bộ về kho
+├── alerts.py       cảnh báo theo ngưỡng
 ├── state.py        phiên chat, audit, người dùng, quyền cấp riêng (SQLite/PostgreSQL)
 ├── access.py       quản lý người dùng & quyền    webauth.py   đăng nhập web
 ├── numcheck.py     đối chiếu số                 periods.py   "tuần này", "tháng 10"… → ngày
@@ -464,14 +484,17 @@ Test không gọi model AI thật và không cần mạng. CI (GitHub Actions) c
 - [x] Báo cáo định kỳ, `/admin`, Slack, cấp quyền có hạn dùng, reviewer
 - [x] Hai phiên bản triển khai: Windows Server (Windows Service) và Linux (Docker)
 - [x] Báo cáo định kỳ qua email (SMTP, bản HTML có bảng)
-- [ ] Cảnh báo theo ngưỡng (vd doanh thu giảm > 20%, tồn kho dưới mức) gửi ngay qua chat/email
+- [x] Nhiều agent chuyên trách (router, analyst, advisor đánh giá + đề xuất, designer), model riêng từng agent,
+      token theo từng agent
+- [x] Cảnh báo theo ngưỡng (vd doanh thu giảm > 20%, tồn kho dưới mức) gửi ngay qua chat/email
+- [x] Tự đẩy dữ liệu lên Power BI Service theo lịch (push semantic model, service principal)
 - [ ] Xuất file từ chat (Excel/CSV), ảnh biểu đồ trên Telegram/Zalo · báo cáo PDF / Excel đính kèm email
-- [ ] Trang chat web: danh sách và xoá cuộc trò chuyện, hiển thị markdown/bảng, stream câu trả lời, đánh giá 👍/👎
-- [ ] Trình cấu hình nguồn dữ liệu trên `/admin` (không phải sửa YAML) · hiển thị giờ theo múi giờ workspace
+- [ ] Đánh giá câu trả lời 👍/👎 ngay trong Telegram/Zalo để cải thiện knowledge
+- [ ] Trình cấu hình nguồn dữ liệu trên `/admin` (không phải sửa YAML)
 - [ ] Đăng nhập Google / Microsoft 365, xác thực hai lớp, tự đổi mật khẩu
 - [ ] Hỏi đáp tài liệu nội bộ (RAG trên PDF/Word) · lớp định nghĩa chỉ số có cấu trúc, câu hỏi đã lưu
 - [ ] `bizagent backup` · chi phí API theo VND / người · nhiều workspace trong một tiến trình
-- [ ] Microsoft Teams · bot trong group · tách nhiều agent chuyên trách khi cần
+- [ ] Microsoft Teams · bot trong group · agent viết code phân tích (Python sandbox) trong nhóm agent
 
 Bản Nyna AI Agent trước đây (bot Telegram riêng cho chuỗi Nyna) được lưu ở tag git `nyna-v1`.
 
