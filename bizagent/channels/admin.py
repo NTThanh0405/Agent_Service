@@ -1,7 +1,7 @@
-"""Trang quản trị web /admin: người dùng, quyền cấp riêng, nguồn dữ liệu, đồng bộ, báo cáo, audit.
+"""Trang quản trị web /admin: người dùng, quyền cấp riêng, nguồn dữ liệu, đồng bộ, báo cáo, cảnh báo, audit.
 
 - Role trong `grant_roles` vào được trang (cấp/thu hồi quyền trong phạm vi nguồn mình xem được).
-- Role trong `admin_roles` thêm/xoá người dùng, chạy đồng bộ, gửi báo cáo, xem audit.
+- Role trong `admin_roles` thêm/xoá người dùng, chạy đồng bộ, gửi báo cáo, kiểm tra cảnh báo, xem audit.
 Form POST kiểm tra Origin cùng máy chủ (chống CSRF), cookie phiên SameSite=Lax.
 """
 
@@ -152,6 +152,29 @@ def mount_admin(app: FastAPI, service, get_principal: Callable, page: Callable[[
                                   + btn(f"/admin/reports/{name}/send", "Gửi ngay", {})])
                 parts.append(card("Báo cáo định kỳ", table(["Tên", "Tiêu đề", "Lịch", "Người nhận", ""], rrows)
                                   or "<p>Chưa có reports.yaml</p>", "bao-cao"))
+            # cảnh báo theo ngưỡng
+            try:
+                arunner = alert_runner()
+            except Exception as ex:
+                parts.append(card("Cảnh báo theo ngưỡng", f'<p class="err">{e(str(ex))}</p>', "canh-bao"))
+            else:
+                arows = []
+                for name, spec in arunner.config.alerts.items():
+                    last = await asyncio.to_thread(arunner.last_check, name)
+                    when = last.get("at", "")[:16].replace("T", " ")
+                    status = f"{when} UTC — {last.get('summary', '')}" if when else "chưa kiểm tra"
+                    if last.get("fired"):
+                        status = f"<b>{e(status)}</b>"
+                    else:
+                        status = e(status)
+                    arows.append([e(name), e(spec.title) + ("" if spec.enabled else " (tắt)"),
+                                  f"<code>{e(spec.condition)}</code><br>{e(spec.dataset)} · {e(spec.period)}",
+                                  e(spec.check.describe()), e(", ".join(arunner.recipients(spec))), status,
+                                  btn(f"/admin/alerts/{name}/check", "Kiểm tra ngay", {})])
+                parts.append(card("Cảnh báo theo ngưỡng",
+                                  table(["Tên", "Tiêu đề", "Điều kiện", "Lịch kiểm tra", "Người nhận",
+                                         "Lần kiểm tra cuối", ""], arows) if arows
+                                  else "<p>Chưa có alerts.yaml (xem docs/ALERTS.md)</p>", "canh-bao"))
             # mức dùng hôm nay (token do model báo về; dùng để soát chi phí API)
             day = service._today()
             usage = await asyncio.to_thread(store.kv_prefix, f"usage:{day}:")
@@ -275,6 +298,29 @@ def mount_admin(app: FastAPI, service, get_principal: Callable, page: Callable[[
         res = await runner.send_now(name)
         store.audit(p.user_id, "report_manual", report=name, result=res)
         return done("; ".join(f"{k}: {v}" for k, v in res.items()) or "Không có người nhận", "#bao-cao")
+
+    def alert_runner():
+        from bizagent.alerts import AlertRunner, load_alerts
+
+        if getattr(service, "alert_runner", None) is None:
+            service.alert_runner = AlertRunner(service)
+        else:
+            service.alert_runner.config = load_alerts(ws)       # sửa alerts.yaml là thấy ngay trên trang
+        return service.alert_runner
+
+    @app.post("/admin/alerts/{name}/check")
+    async def alert_check(name: str, request: Request):
+        p, redirect = guard(request, need_admin=True)
+        if redirect:
+            return redirect
+        await form(request)
+        runner = alert_runner()
+        if name not in runner.config.alerts:
+            raise HTTPException(status_code=404)
+        res = await runner.check_and_record(name)           # vẫn chống gửi lặp: đã gửi trong kỳ thì không gửi lại
+        store.audit(p.user_id, "alert_manual", alert=name, result=res.status, summary=res.summary())
+        detail = "; ".join(f"{k}: {v}" for k, v in res.status.items())
+        return done(f"{name}: {res.summary()}" + (f" — {detail}" if detail else ""), "#canh-bao")
 
     @app.get("/admin/audit", response_class=HTMLResponse)
     async def audit_page(request: Request, user: str = "", kind: str = "", limit: int = 200):

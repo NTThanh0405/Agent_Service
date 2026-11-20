@@ -384,6 +384,49 @@ class SlackSender(Sender):
         await self.client.post_message(chat_id, text)
 
 
+# ----------------------------------------------------------------------------- phần dùng chung (báo cáo, cảnh báo)
+def make_sender(service, channel: str, cache: dict[str, Sender]) -> Sender:
+    """Sender của một kênh (tạo một lần, giữ trong `cache`)."""
+    if channel not in cache:
+        factories = {"telegram": TelegramSender, "zalo": lambda: ZaloSender(service.store),
+                     "slack": SlackSender, "email": EmailSender}
+        if channel not in factories:
+            raise RuntimeError(f"Kênh '{channel}' không gửi được báo cáo (dùng telegram/zalo/slack/email)")
+        cache[channel] = factories[channel]()
+    return cache[channel]
+
+
+def expand_recipients(ws, recipients: list[str]) -> list[str]:
+    """`role:<role>` -> mọi người dùng có role đó; chỉ giữ ID thuộc kênh gửi được, bỏ trùng."""
+    out: list[str] = []
+    for r in recipients:
+        if r.startswith("role:"):
+            out += [u.id for u in ws.all_users() if u.role == r[5:]]
+        else:
+            out.append(r)
+    return [r for r in dict.fromkeys(out) if r.split(":", 1)[0] in REPORT_CHANNELS]
+
+
+def period_params(ws, period: str, params: dict[str, Any], today: date) -> tuple[dict[str, Any], str, str]:
+    """(tham số cho dataset, nhãn kỳ để hiển thị, khoá kỳ "start..end")."""
+    p = resolve_period(period, today, ws.info.week_start)
+    prev = p.previous()
+    label = p.start.strftime("%d/%m/%Y") if p.days == 1 else f"{p.start:%d/%m} – {p.end:%d/%m/%Y}"
+    return ({**params, "start": p.start.isoformat(), "end": p.end.isoformat(),
+             "prev_start": prev.start.isoformat(), "prev_end": prev.end.isoformat()},
+            label, f"{p.start.isoformat()}..{p.end.isoformat()}")
+
+
+async def save_as_thread(service, user_id: str, title: str, text: str) -> None:
+    """Tin đã gửi thành cuộc trò chuyện mới của người nhận: nhắn tiếp là hỏi trong ngữ cảnh tin đó."""
+    from langchain_core.messages import AIMessage
+
+    thread = await asyncio.to_thread(service.store.new_thread, user_id, title)
+    graph = await service.ensure_ready()
+    await graph.aupdate_state({"configurable": {"thread_id": f"{user_id}:{thread}"}},
+                              {"messages": [AIMessage(content=text)]}, as_node="agent")
+
+
 # ----------------------------------------------------------------------------- dựng và gửi
 class ReportRunner:
     def __init__(self, service, senders: dict[str, Sender] | None = None):
@@ -394,29 +437,14 @@ class ReportRunner:
         self._senders = senders or {}
 
     def sender(self, channel: str) -> Sender:
-        if channel not in self._senders:
-            factories = {"telegram": TelegramSender, "zalo": lambda: ZaloSender(self.service.store),
-                         "slack": SlackSender, "email": EmailSender}
-            if channel not in factories:
-                raise RuntimeError(f"Kênh '{channel}' không gửi được báo cáo (dùng telegram/zalo/slack/email)")
-            self._senders[channel] = factories[channel]()
-        return self._senders[channel]
+        return make_sender(self.service, channel, self._senders)
 
     def recipients(self, spec: ReportSpec) -> list[str]:
-        out: list[str] = []
-        for r in spec.recipients:
-            if r.startswith("role:"):
-                out += [u.id for u in self.ws.all_users() if u.role == r[5:]]
-            else:
-                out.append(r)
-        return [r for r in dict.fromkeys(out) if r.split(":", 1)[0] in REPORT_CHANNELS]
+        return expand_recipients(self.ws, spec.recipients)
 
     def params(self, spec: ReportSpec, today: date) -> tuple[dict[str, Any], str]:
-        p = resolve_period(spec.period, today, self.ws.info.week_start)
-        prev = p.previous()
-        label = p.start.strftime("%d/%m/%Y") if p.days == 1 else f"{p.start:%d/%m} – {p.end:%d/%m/%Y}"
-        return {**spec.params, "start": p.start.isoformat(), "end": p.end.isoformat(),
-                "prev_start": prev.start.isoformat(), "prev_end": prev.end.isoformat()}, label
+        params, label, _ = period_params(self.ws, spec.period, spec.params, today)
+        return params, label
 
     async def build(self, name: str, user_id: str, today: date | None = None) -> str | None:
         """Nội dung chữ của báo cáo cho một người nhận (None nếu người đó không được xem mục nào)."""
@@ -506,12 +534,7 @@ class ReportRunner:
         store = self.service.store
         if two_way:
             # báo cáo thành cuộc trò chuyện mới: người nhận hỏi tiếp trong ngữ cảnh báo cáo
-            from langchain_core.messages import AIMessage
-
-            thread = await asyncio.to_thread(store.new_thread, user_id, self.config.reports[name].title)
-            graph = await self.service.ensure_ready()
-            await graph.aupdate_state({"configurable": {"thread_id": f"{user_id}:{thread}"}},
-                                      {"messages": [AIMessage(content=text)]}, as_node="agent")
+            await save_as_thread(self.service, user_id, self.config.reports[name].title, text)
         await asyncio.to_thread(store.audit, user_id, "report_sent", report=name, channel=channel, chars=len(text))
 
     def _audience(self, user_id: str) -> tuple | None:

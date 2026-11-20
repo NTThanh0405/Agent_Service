@@ -11,6 +11,7 @@
     bizagent mcp-server [-w ten] [--role manager]  MCP server (stdio) cho Claude Desktop / Cursor...
     bizagent audit   [-w ten] [--user id] [--limit 50]  xem audit log
     bizagent report <ten> [-w ten] [--to id] [--preview]  xem trước / gửi ngay báo cáo định kỳ
+    bizagent alert [ten] [-w ten] [--to id] [--preview] [--force]  danh sách / kiểm tra ngay cảnh báo theo ngưỡng
     bizagent hash-password <ten>   tạo mật khẩu cho tài khoản web
     bizagent powerbi-export [-w ten]           xuất file Parquet/CSV cho Power BI ngay
     bizagent telegram [-w ten]     bot Telegram
@@ -142,22 +143,49 @@ def cmd_check(args) -> int:
         missing = missing_env(zcfg)
         print(f"Kênh Zalo: {'thiếu ' + ', '.join(missing) if missing else 'đủ cấu hình'}")
         ok &= not missing
-    try:                                              # báo cáo có người nhận email -> cần SMTP
-        from bizagent.reports import load_reports, smtp_missing_env
+    def has_email(recipients: list[str]) -> bool:
+        return any(x.startswith("email:") or (x.startswith("role:") and any(
+            u.role == x[5:] and u.id.startswith("email:") for u in ws.users)) for x in recipients)
 
-        users = {u.id: u for u in ws.users}
-        email_reports = [n for n, r in load_reports(ws).reports.items() if r.enabled and any(
-            x.startswith("email:") or (x.startswith("role:") and any(
-                u.role == x[5:] and u.id.startswith("email:") for u in users.values()))
-            for x in r.recipients)]
-        if email_reports:
-            missing = smtp_missing_env()
-            print(f"Email (báo cáo {', '.join(email_reports)}): "
-                  f"{'thiếu ' + ', '.join(missing) if missing else 'đủ cấu hình SMTP'}")
-            ok &= not missing
+    email_users: list[str] = []
+    try:                                              # báo cáo có người nhận email -> cần SMTP
+        from bizagent.reports import load_reports
+
+        email_users += [f"báo cáo {n}" for n, r in load_reports(ws).reports.items()
+                        if r.enabled and has_email(r.recipients)]
     except Exception as e:
         print(f"Báo cáo: LỖI cấu hình: {e}")
         ok = False
+    try:                                              # cảnh báo theo ngưỡng (alerts.yaml)
+        from bizagent.alerts import check_alerts, load_alerts
+
+        alerts = load_alerts(ws).alerts
+        if alerts:
+            try:
+                from bizagent.dashboards.config import DashboardCatalog
+
+                catalog = DashboardCatalog(ws)
+            except Exception:
+                catalog = None                        # lỗi dashboard đã in ở trên
+            problems, notes = check_alerts(ws, catalog)
+            on = [n for n, a in alerts.items() if a.enabled]
+            print(f"Cảnh báo: {len(on)}/{len(alerts)} đang bật"
+                  + "".join(f"\n  {n} ({alerts[n].check.describe()}): {alerts[n].condition}" for n in on))
+            for level, msgs in (("LỖI", problems), ("lưu ý", notes)):
+                for msg in msgs:
+                    name, _, why = msg.partition(": ")
+                    print(f"Cảnh báo {name}: {level}: {why}")
+            ok &= not problems
+            email_users += [f"cảnh báo {n}" for n, a in alerts.items() if a.enabled and has_email(a.recipients)]
+    except Exception as e:
+        print(f"Cảnh báo: LỖI cấu hình: {e}")
+        ok = False
+    if email_users:
+        from bizagent.reports import smtp_missing_env
+
+        missing = smtp_missing_env()
+        print(f"Email ({', '.join(email_users)}): {'thiếu ' + ', '.join(missing) if missing else 'đủ cấu hình SMTP'}")
+        ok &= not missing
     for role in ws.info.roles:
         print(f"Role {role}: nguồn {ws.sources_for_role(role) or '(không có)'}")
     try:
@@ -420,6 +448,62 @@ def cmd_report(args) -> int:
     return result[0]
 
 
+def cmd_alert(args) -> int:
+    from bizagent.alerts import AlertRunner
+    from bizagent.reports import fmt
+
+    service = _service(args)
+
+    async def run() -> int:
+        try:
+            runner = AlertRunner(service)
+            alerts = runner.config.alerts
+            if not args.name:
+                if not alerts:
+                    print(f"Workspace {service.ws.name} chưa có alerts.yaml (hoặc chưa có cảnh báo)")
+                    return 1
+                for name, spec in alerts.items():
+                    last = runner.last_check(name)
+                    when = last.get("at", "")[:16].replace("T", " ")
+                    print(f"{name:24} {'bật' if spec.enabled else 'tắt':4} {spec.check.describe():24} "
+                          f"{spec.condition}\n{'':24} lần cuối: {when + ' UTC — ' + last['summary'] if when else '-'}")
+                return 0
+            if args.name not in alerts:
+                print(f"Không có cảnh báo '{args.name}'. Có: {list(alerts)}")
+                return 1
+            only = [args.to] if args.to else None
+            if args.preview:
+                res = await runner.check(args.name, send=False, force=args.force, only=only)
+            else:
+                res = await runner.check_and_record(args.name, force=args.force, only=only)
+            r = res.result
+            print(f"{args.name}: {res.summary()}")
+            if r is not None:
+                cur = r.current
+                if cur is not None and not r.multi:
+                    spec = runner.config.alerts[args.name]
+                    kind = "percent" if spec.cond.is_pct else spec.format
+                    print(f"Kỳ {r.period_label}: giá trị {fmt(cur.value, kind)}, ngưỡng {fmt(cur.threshold, kind)}")
+                else:
+                    print(f"Kỳ {r.period_label}: {len(r.matches)}/{r.total_rows} dòng vượt ngưỡng")
+            for uid, status in res.status.items():
+                print(f"  {uid}: {status}")
+            if args.preview:
+                for uid, text in res.messages.items():
+                    print(f"\n===== {uid}\n{text}")
+            return 1 if res.error or any(s.startswith("lỗi") for s in res.status.values()) else 0
+        finally:
+            await service.aclose()
+
+    result: list[int] = []
+
+    async def wrapper() -> None:
+        result.append(await run())
+
+    _run_async(wrapper())
+    return result[0]
+
+
 def cmd_telegram(args) -> int:
     from bizagent.channels.telegram import run_telegram
 
@@ -483,6 +567,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--to", default=None, help="chỉ gửi/xem cho một người (vd telegram:123)")
     sp.add_argument("--preview", action="store_true", help="chỉ in nội dung, không gửi")
     sp.set_defaults(func=cmd_report)
+
+    sp = sub.add_parser("alert", help="danh sách / kiểm tra ngay cảnh báo theo ngưỡng (alerts.yaml)")
+    ws_arg(sp)
+    sp.add_argument("name", nargs="?", default=None, help="tên cảnh báo; bỏ trống = liệt kê")
+    sp.add_argument("--to", default=None, help="chỉ xét một người nhận (vd telegram:123)")
+    sp.add_argument("--preview", action="store_true", help="chỉ kiểm tra và in nội dung, không gửi")
+    sp.add_argument("--force", action="store_true", help="gửi cả khi đã gửi trong kỳ này (bỏ qua chống gửi lặp)")
+    sp.set_defaults(func=cmd_alert)
 
     sp = sub.add_parser("audit", help="xem audit log")
     ws_arg(sp)
