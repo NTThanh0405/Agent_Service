@@ -40,7 +40,7 @@ Ví dụ: kế toán `telegram:555` role `staff` (không xem gì) cần xem dữ
 
 Đăng nhập web (role trong `grant_roles`). Gồm: trạng thái nguồn dữ liệu và job đồng bộ (nút **Chạy ngay**),
 người dùng (thêm/xoá, đặt mật khẩu web), quyền cấp riêng (cấp/thu hồi), báo cáo định kỳ (**Xem trước**, **Gửi ngay**),
-audit log có lọc. Form chống gửi chéo trang (kiểm tra Origin + cookie SameSite).
+cảnh báo theo ngưỡng (**Kiểm tra ngay**), audit log có lọc. Form chống gửi chéo trang (kiểm tra Origin + cookie SameSite).
 
 ## Giới hạn dùng và chi phí
 

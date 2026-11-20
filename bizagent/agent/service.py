@@ -279,18 +279,21 @@ class AgentService:
         await asyncio.to_thread(self.store.prune_audit, cfg.audit_days)
         await asyncio.to_thread(self.store.prune_kv, "usage:", 90)          # mức dùng theo ngày giữ 90 ngày
         await asyncio.to_thread(self.store.prune_kv, "login_link:", 2)      # link đăng nhập đã dùng (hạn 24 giờ)
+        await asyncio.to_thread(self.store.prune_kv, "alert_", 400)         # trạng thái cảnh báo (kỳ dài nhất: năm)
         return len(victims)
 
     # ------------------------------------------------------------------ tác vụ nền
     def start_background_tasks(self) -> list[asyncio.Task]:
-        """Lịch đồng bộ (sync.yaml, nếu run_in_server) + xuất file Power BI (nếu có powerbi.export)
-        + dọn phiên chat cũ mỗi giờ. Gọi trong event loop của server/bot."""
+        """Lịch đồng bộ (sync.yaml, nếu run_in_server) + báo cáo định kỳ (reports.yaml) + cảnh báo theo ngưỡng
+        (alerts.yaml) + xuất file Power BI (nếu có powerbi.export) + dọn phiên chat cũ mỗi giờ.
+        Gọi trong event loop của server/bot."""
         from bizagent.dashboards.powerbi import PowerBIExporter
         from bizagent.sync import build_runner
 
         if os.environ.get("BIZAGENT_BACKGROUND_TASKS", "1") == "0":
             # nhiều tiến trình cùng workspace: chỉ MỘT tiến trình chạy tác vụ nền (tránh gửi báo cáo trùng)
-            log.info("BIZAGENT_BACKGROUND_TASKS=0: tiến trình này không chạy đồng bộ, báo cáo, xuất Power BI")
+            log.info("BIZAGENT_BACKGROUND_TASKS=0: tiến trình này không chạy đồng bộ, báo cáo, cảnh báo, "
+                     "xuất Power BI")
             return []
         tasks: list[asyncio.Task] = [asyncio.create_task(self._prune_forever())]
         runner = build_runner(self.ws, self.registry)
@@ -305,6 +308,14 @@ class AgentService:
                 tasks.append(asyncio.create_task(self.report_runner.run_forever()))
         except WorkspaceError as e:
             log.error("Báo cáo định kỳ lỗi cấu hình: %s", e)
+        from bizagent.alerts import AlertRunner
+
+        try:
+            self.alert_runner = AlertRunner(self)
+            if self.alert_runner.config.alerts:
+                tasks.append(asyncio.create_task(self.alert_runner.run_forever()))
+        except WorkspaceError as e:
+            log.error("Cảnh báo theo ngưỡng lỗi cấu hình: %s", e)
         pbi = self.catalog.config.powerbi if self.catalog else None
         if pbi and pbi.enabled and pbi.export:
             self.powerbi_exporter = PowerBIExporter(self.dashboard_engine)

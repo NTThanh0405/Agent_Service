@@ -1,0 +1,39 @@
+# Cảnh báo theo ngưỡng gửi ngay qua Telegram / Zalo / Slack / email. Hướng dẫn: docs/ALERTS.md
+# Xem trước: bizagent alert doanh_thu_giam --preview   ·   kiểm tra + gửi ngay: bizagent alert doanh_thu_giam
+# Danh sách và lần kiểm tra cuối: bizagent alert   ·   trang /admin, mục "Cảnh báo theo ngưỡng"
+alerts:
+  doanh_thu_giam:
+    title: "Doanh thu hôm qua giảm mạnh"
+    dataset: kpi                            # tên trong datasets.yaml
+    period: "hôm qua"                       # {{start}}..{{end}}; kỳ trước {{prev_start}}..{{prev_end}}
+    params: {cua_hang: null}
+    condition: "pct_change(doanh_thu, doanh_thu_truoc) <= -20"     # giảm từ 20% trở lên so với hôm trước
+    label: "Doanh thu so với hôm trước"
+    check: {at: "09:00"}
+    recipients: ["role:admin", "role:manager"]
+    dashboard: tong_quan
+
+  doanh_thu_duoi_muc:
+    title: "Doanh thu hôm qua dưới 80% hôm trước"
+    dataset: kpi
+    period: "hôm qua"
+    params: {cua_hang: null}
+    condition: "doanh_thu < 0.8 * doanh_thu_truoc"
+    label: "Doanh thu"
+    format: currency
+    check: {at: "09:00"}
+    recipients: ["role:admin"]
+    enabled: false                          # ví dụ cách viết khác của cảnh báo trên
+
+  cham_muc_tieu:
+    title: "Cửa hàng chậm tiến độ mục tiêu tháng"
+    dataset: dat_muc_tieu                   # nguồn warehouse: chỉ ai xem được kho mới nhận
+    period: "tháng này"
+    condition: "ty_le_dat < 30"
+    label: "Tỷ lệ đạt mục tiêu"
+    format: percent
+    label_column: cua_hang                  # dataset nhiều dòng: liệt kê cửa hàng vượt ngưỡng
+    check: {at: "10:00", days: [mon, thu]}
+    cooldown: 3d                            # vẫn chậm thì nhắc lại sau 3 ngày (mặc định: một lần mỗi kỳ)
+    recipients: ["role:admin", "role:manager"]
+    dashboard: tong_quan

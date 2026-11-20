@@ -1,0 +1,22 @@
+# Cảnh báo theo ngưỡng: kiểm tra dataset theo lịch, vượt ngưỡng thì gửi ngay qua Telegram / Zalo / Slack / email.
+# Hướng dẫn: docs/ALERTS.md · thử: bizagent alert <ten> --preview
+alerts: {}
+#  doanh_thu_giam:
+#    title: "Doanh thu hôm qua giảm mạnh"
+#    dataset: kpi                               # tên trong datasets.yaml (dùng {{start}} {{end}} {{prev_start}} {{prev_end}})
+#    period: "hôm qua"                          # hôm nay, tuần này, tháng này, 7 ngày qua...
+#    condition: "pct_change(doanh_thu, doanh_thu_truoc) <= -20"   # hoặc "doanh_thu < 0.8 * doanh_thu_truoc"
+#    label: "Doanh thu so với hôm trước"
+#    check: {at: "09:00"}                       # mỗi ngày lúc 9h; days: [mon, tue, wed, thu, fri]
+#    recipients: ["role:admin", "telegram:123456789", "email:giamdoc@congty.vn"]
+#    dashboard: tong_quan                       # kèm link dashboard
+#
+#  ton_kho_thap:
+#    title: "Món sắp hết hàng"
+#    dataset: ton_kho                           # vd SELECT ten_mon, so_luong AS ton_kho FROM ton_kho
+#    period: "hôm nay"
+#    condition: "ton_kho < 10"
+#    label_column: ten_mon                      # dataset nhiều dòng: liệt kê từng món dưới ngưỡng
+#    check: {every: 30m, between: "08:00-21:00"}
+#    cooldown: 4h                               # còn thiếu thì nhắc lại sau 4 giờ (mặc định: một lần mỗi kỳ)
+#    recipients: ["role:manager"]

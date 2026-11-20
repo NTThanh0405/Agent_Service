@@ -49,7 +49,7 @@ Mục lục: [Dùng cho ai](#dùng-cho-ai-chọn-cách-triển-khai) · [Tính n
 | **Tuỳ chỉnh theo doanh nghiệp** | Mỗi doanh nghiệp một thư mục *workspace*: prompt (Jinja2), định nghĩa chỉ số, SQL mẫu, phân quyền |
 | **Kênh** | Telegram, Zalo OA, Slack, terminal, Claude Desktop/Cursor (MCP), REST API cho phần mềm khác · báo cáo định kỳ qua cả email · web dành cho dashboard, Power BI, `/admin` |
 | **Dashboard** | Dashboard sống viết bằng YAML/SQL/JS, tự làm mới, không hết hạn, agent tạo được bằng lời · hoặc đưa dữ liệu sang **Power BI** |
-| **Vận hành** | Báo cáo định kỳ · trang quản trị `/admin` · cấp quyền theo người có hạn dùng · audit log · phiên chat lưu DB |
+| **Vận hành** | Báo cáo định kỳ · cảnh báo theo ngưỡng (doanh thu giảm, tồn kho thấp…) gửi ngay qua Telegram/Zalo/Slack/email · trang quản trị `/admin` · cấp quyền theo người có hạn dùng · audit log · phiên chat lưu DB |
 | **An toàn** | Chỉ cho `SELECT` (kiểm tra theo từng loại database) · phiên DB chỉ-đọc · che cột cá nhân · reviewer đối chiếu mọi con số trong câu trả lời với dữ liệu |
 
 ---
@@ -73,7 +73,7 @@ Mọi kênh (Telegram, Zalo, Slack, terminal, REST API) đi qua một điểm v�
 8. **Reviewer** đối chiếu con số trong câu trả lời với dữ liệu vừa truy vấn; lưu lịch sử, mức dùng, audit; trả lời về kênh.
 
 Chạy nền trong cùng tiến trình (`bizagent run`): **đồng bộ** nguồn → kho DuckDB (`sync.yaml`), **báo cáo định kỳ**
-(`reports.yaml`, kiểm tra lịch mỗi phút), **xuất Power BI** (`powerbi.export`), **dọn** phiên chat/audit cũ mỗi giờ.
+(`reports.yaml`, kiểm tra lịch mỗi phút), **cảnh báo theo ngưỡng** (`alerts.yaml`), **xuất Power BI** (`powerbi.export`), **dọn** phiên chat/audit cũ mỗi giờ.
 
 ---
 
@@ -291,6 +291,7 @@ workspaces/cong_ty_a/
 ├── dashboards/       mỗi dashboard một file YAML (+ JS cho widget tuỳ chỉnh)
 ├── sync.yaml         lịch đồng bộ nguồn → kho DuckDB
 ├── reports.yaml      báo cáo định kỳ
+├── alerts.yaml       cảnh báo theo ngưỡng (KPI vượt ngưỡng → gửi ngay)
 ├── channels.yaml     bật Zalo OA, Slack
 ├── users.yaml        người dùng và role (không commit)
 ├── .env              bí mật riêng của workspace (không commit)
@@ -325,6 +326,7 @@ default_model: anthropic:claude-sonnet-5-5   # hoặc openai:<model>, google_gen
 | [docs/CONNECTORS.md](docs/CONNECTORS.md) | Database, REST API (Base.vn, iPOS, MISA), Google Sheets, CSV/Excel, kho DuckDB và đồng bộ |
 | [docs/DASHBOARDS.md](docs/DASHBOARDS.md) | Dashboard sống, Power BI, đăng nhập web |
 | [docs/REPORTS.md](docs/REPORTS.md) | Báo cáo định kỳ qua Telegram/Zalo/Slack |
+| [docs/ALERTS.md](docs/ALERTS.md) | Cảnh báo theo ngưỡng: điều kiện, lịch kiểm tra, chống gửi lặp |
 | [docs/CHANNELS.md](docs/CHANNELS.md) | Telegram, Zalo OA, phiên chat, audit |
 | [docs/MCP.md](docs/MCP.md) | Dùng MCP server làm nguồn; mở dữ liệu cho Claude Desktop/Cursor |
 | [docs/ADMIN.md](docs/ADMIN.md) | Người dùng, cấp quyền có hạn dùng, trang `/admin`, reviewer |
@@ -397,6 +399,7 @@ lần; đăng xuất thu hồi mọi phiên của người đó. `/api/v1/health
 | `bizagent prompt` | In system prompt đã ghép (`--agent advisor`: prompt từng agent khi bật nhiều agent) |
 | `bizagent sync [job] [--status]` | Đồng bộ dữ liệu về kho |
 | `bizagent report <ten> [--preview] [--to id]` | Xem trước / gửi ngay báo cáo |
+| `bizagent alert [ten] [--preview] [--to id]` | Danh sách / kiểm tra ngay cảnh báo theo ngưỡng |
 | `bizagent powerbi-export` | Xuất file Parquet/CSV cho Power BI |
 | `bizagent audit [--user id]` | Xem audit log |
 | `bizagent usage [--user id\|all] [--days 30]` | Báo cáo mức dùng token (chỉ khi cần xem; trong chat gõ `/token`) |
@@ -406,7 +409,7 @@ lần; đăng xuất thu hồi mọi phiên của người đó. `/api/v1/health
 
 Mọi lệnh nhận `-w <workspace>` (mặc định lấy `BIZAGENT_WORKSPACE`, rồi `demo`).
 Chạy nhiều tiến trình cho cùng một workspace (vd `serve` và `telegram` riêng): đặt `BIZAGENT_BACKGROUND_TASKS=0`
-cho mọi tiến trình trừ một, để báo cáo không bị gửi trùng. Dùng `bizagent run` thì không cần.
+cho mọi tiến trình trừ một, để báo cáo và cảnh báo không bị gửi trùng. Dùng `bizagent run` thì không cần.
 
 ---
 
@@ -442,6 +445,7 @@ bizagent/
 ├── dashboards/     dataset, dashboard sống, Power BI
 ├── channels/       web (dashboard, /admin, REST API), Telegram, Zalo, Slack, lệnh chung
 ├── reports.py      báo cáo định kỳ          sync.py      đồng bộ về kho
+├── alerts.py       cảnh báo theo ngưỡng
 ├── state.py        phiên chat, audit, người dùng, quyền cấp riêng (SQLite/PostgreSQL)
 ├── access.py       quản lý người dùng & quyền    webauth.py   đăng nhập web
 ├── numcheck.py     đối chiếu số                 periods.py   "tuần này", "tháng 10"… → ngày
@@ -480,7 +484,7 @@ Test không gọi model AI thật và không cần mạng. CI (GitHub Actions) c
 - [x] Báo cáo định kỳ qua email (SMTP, bản HTML có bảng)
 - [x] Nhiều agent chuyên trách (router, analyst, advisor đánh giá + đề xuất, designer), model riêng từng agent,
       token theo từng agent
-- [ ] Cảnh báo theo ngưỡng (vd doanh thu giảm > 20%, tồn kho dưới mức) gửi ngay qua chat/email
+- [x] Cảnh báo theo ngưỡng (vd doanh thu giảm > 20%, tồn kho dưới mức) gửi ngay qua chat/email
 - [ ] Xuất file từ chat (Excel/CSV), ảnh biểu đồ trên Telegram/Zalo · báo cáo PDF / Excel đính kèm email
 - [ ] Đánh giá câu trả lời 👍/👎 ngay trong Telegram/Zalo để cải thiện knowledge
 - [ ] Trình cấu hình nguồn dữ liệu trên `/admin` (không phải sửa YAML)
