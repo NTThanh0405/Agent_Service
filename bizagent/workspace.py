@@ -130,11 +130,28 @@ class ReviewerSettings(_Strict):
     min_value: float = 10       # bỏ qua số nhỏ (<= giá trị này): số thứ tự, số ngày...
 
 
+class LimitSettings(_Strict):
+    """Giới hạn dùng: chống quá tải và chống tốn tiền API ngoài ý muốn."""
+
+    max_concurrent: int = 8                 # số câu hỏi xử lý cùng lúc trong tiến trình (câu sau chờ tới lượt)
+    per_user_per_minute: int = 10           # số câu hỏi tối đa mỗi người mỗi phút (0 = không giới hạn)
+    daily_tokens_per_user: int = 0          # tổng token (vào + ra) mỗi người mỗi ngày (0 = không giới hạn)
+    exempt_roles: list[str] = Field(default_factory=list)   # role không bị giới hạn tần suất / token
+
+    @field_validator("max_concurrent")
+    @classmethod
+    def _conc(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("max_concurrent phải >= 1")
+        return v
+
+
 class AgentsConfig(_Strict):
     default_model: str = "anthropic:claude-sonnet-5-5"
     models: dict[str, str | ModelSpec] = Field(default_factory=dict)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     reviewer: ReviewerSettings = Field(default_factory=ReviewerSettings)
+    limits: LimitSettings = Field(default_factory=LimitSettings)
 
 
 class UserEntry(_Strict):

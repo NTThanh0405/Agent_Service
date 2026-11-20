@@ -27,7 +27,7 @@ import duckdb
 from bizagent.security.guard import check_select
 from bizagent.security.masking import MaskingError, mask_query, mask_rows
 from bizagent.sources.base import DataSource, QueryResult, SourceError, TableInfo
-from bizagent.tabular import SAFE_DUCKDB_CONFIG, create_table, quote_ident, slugify
+from bizagent.tabular import SAFE_DUCKDB_CONFIG, QueryTimeout, create_table, execute_with_timeout, quote_ident, slugify
 
 META = "bizagent_meta"
 _LOCKS: dict[str, threading.Lock] = {}
@@ -45,6 +45,8 @@ class WarehouseSource(DataSource):
         self.max_rows = int(config.get("max_rows", 200))
         self.mask_columns: list[str] = list(config.get("mask_columns") or [])
         self.allowed_tables = list(config.get("allowed_tables") or ["main.*"])
+        self.timeout_seconds = float(config.get("timeout_seconds", 30))               # câu truy vấn của agent
+        self.fetch_timeout_seconds = float(config.get("fetch_timeout_seconds", 300))  # đồng bộ, dashboard, Power BI
         self._lock = _LOCKS.setdefault(str(self.path.resolve()), threading.Lock())
         with self._connect() as con:
             con.execute(f"CREATE SCHEMA IF NOT EXISTS {META}")
@@ -128,14 +130,14 @@ class WarehouseSource(DataSource):
     def query(self, query: str, max_rows: int | None = None) -> QueryResult:
         checked = check_select(query, dialect="duckdb", allowed_tables=self.allowed_tables, default_schema="main")
         limit = min(max_rows or self.max_rows, self.max_rows)
-        return self._run(checked.sql, checked.tables, limit)
+        return self._run(checked.sql, checked.tables, limit, self.timeout_seconds)
 
     def fetch(self, query: str, limit: int) -> QueryResult:
         """Cho đồng bộ/xuất dữ liệu: qua guard nhưng giới hạn dòng riêng."""
         checked = check_select(query, dialect="duckdb", allowed_tables=self.allowed_tables, default_schema="main")
-        return self._run(checked.sql, checked.tables, limit)
+        return self._run(checked.sql, checked.tables, limit, self.fetch_timeout_seconds)
 
-    def _run(self, sql: str, tables: tuple[str, ...], limit: int) -> QueryResult:
+    def _run(self, sql: str, tables: tuple[str, ...], limit: int, timeout: float) -> QueryResult:
         try:
             with self._connect() as con:
                 if self.mask_columns:
@@ -149,10 +151,12 @@ class WarehouseSource(DataSource):
                                          default_schema="main")
                     except MaskingError as e:
                         raise SourceError(str(e)) from e
-                res = con.execute(sql)
-                columns = [d[0] for d in res.description]
-                rows = res.fetchmany(limit + 1)
+                # hết giờ thì ngắt hẳn: câu chạy lâu không được giữ khoá kho, chặn người khác và lịch đồng bộ
+                columns, rows = execute_with_timeout(con, sql, timeout, limit + 1)
                 synced = self._synced_at(con, tables)
+        except QueryTimeout as e:
+            raise SourceError(f"Truy vấn trên kho {self.name} {e} nên đã bị huỷ. Hãy thu hẹp khoảng thời gian "
+                              "hoặc gộp dữ liệu (GROUP BY).") from e
         except duckdb.Error as e:
             raise SourceError(f"Lỗi SQL trên {self.name}: {str(e).splitlines()[0]}") from e
         meta: dict[str, Any] = {"tables": tables}

@@ -23,3 +23,9 @@ agent:
   timeout_seconds: 120
   max_tokens: 3000
   temperature: null       # để null; một số model (vd Claude đời mới) từ chối temperature
+
+limits:                   # chống quá tải và chống tốn tiền API ngoài ý muốn
+  max_concurrent: 8       # số câu hỏi xử lý cùng lúc (câu sau chờ tới lượt)
+  per_user_per_minute: 10 # số câu hỏi tối đa mỗi người mỗi phút (0 = không giới hạn)
+  daily_tokens_per_user: 0   # tổng token vào + ra mỗi người mỗi ngày (0 = không giới hạn), vd 500000
+  exempt_roles: []        # role không bị giới hạn, vd [admin]

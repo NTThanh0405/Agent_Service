@@ -42,6 +42,30 @@ Ví dụ: kế toán `telegram:555` role `staff` (không xem gì) cần xem dữ
 người dùng (thêm/xoá, đặt mật khẩu web), quyền cấp riêng (cấp/thu hồi), báo cáo định kỳ (**Xem trước**, **Gửi ngay**),
 audit log có lọc. Form chống gửi chéo trang (kiểm tra Origin + cookie SameSite).
 
+## Giới hạn dùng và chi phí
+
+```yaml
+# agents.yaml
+limits:
+  max_concurrent: 8           # số câu hỏi xử lý cùng lúc trong tiến trình (câu sau chờ tới lượt)
+  per_user_per_minute: 10     # số câu hỏi tối đa mỗi người mỗi phút (0 = không giới hạn)
+  daily_tokens_per_user: 0    # tổng token vào + ra mỗi người mỗi ngày (0 = không giới hạn), vd 500000
+  exempt_roles: [admin]       # role không bị giới hạn tần suất / token
+```
+
+- Token mỗi câu hỏi lấy từ số liệu model báo về (`usage_metadata`), ghi vào audit (`tokens_in`, `tokens_out`) và
+  cộng dồn theo ngày (múi giờ workspace). Trang `/admin` có bảng **Mức dùng hôm nay**. Mức dùng giữ 90 ngày.
+- Cùng một cuộc trò chuyện, hai tin nhắn gửi liên tiếp được xử lý lần lượt (không ghi chồng lịch sử).
+- Báo cáo định kỳ dựng một lần cho mỗi nhóm người nhận cùng role và cùng nguồn được xem (truy vấn + nhận xét AI).
+
+## Timeout truy vấn
+
+`timeout_seconds` của nguồn (`sources.yaml`) là giới hạn cho câu truy vấn của agent, `fetch_timeout_seconds`
+(mặc định 300) cho đồng bộ, dashboard và Power BI. Hết giờ thì câu truy vấn bị **huỷ ngay trong database**
+(PostgreSQL `statement_timeout`, MySQL `MAX_EXECUTION_TIME`, SQL Server/Oracle timeout của driver, SQLite và DuckDB
+ngắt bằng code), không còn chạy ngầm chiếm kết nối hay giữ khoá kho dữ liệu. Nguồn `warehouse`, `files`,
+`google_sheets` mặc định `timeout_seconds: 30`.
+
 ## Reviewer: đối chiếu số trong câu trả lời
 
 ```yaml

@@ -23,7 +23,7 @@ from bizagent.security.guard import UnsafeSQLError, check_select
 from bizagent.sources.base import DataSource, QueryResult, SourceError
 from bizagent.sources.registry import SourceRegistry
 from bizagent.sources.rest import RestSource
-from bizagent.tabular import SAFE_DUCKDB_CONFIG, create_table
+from bizagent.tabular import SAFE_DUCKDB_CONFIG, QueryTimeout, create_table, execute_with_timeout
 from bizagent.workspace import WorkspaceError
 
 log = logging.getLogger("bizagent.audit")
@@ -241,9 +241,9 @@ def query_result_with_sql(result: QueryResult, sql: str, max_rows: int) -> Query
     con = duckdb.connect(":memory:", config=SAFE_DUCKDB_CONFIG)
     try:
         create_table(con, "result", result.columns, result.rows)
-        res = con.execute(checked.sql)
-        cols = [d[0] for d in res.description]
-        rows = res.fetchmany(max_rows + 1)
+        cols, rows = execute_with_timeout(con, checked.sql, 30, max_rows + 1)
+    except QueryTimeout as e:
+        raise SourceError(f"SQL trên kết quả API {e} nên đã bị huỷ") from e
     except duckdb.Error as e:
         raise SourceError(f"Lỗi SQL trên kết quả API: {str(e).splitlines()[0]}") from e
     finally:

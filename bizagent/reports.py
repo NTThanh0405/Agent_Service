@@ -320,11 +320,24 @@ class ReportRunner:
                                   {"messages": [AIMessage(content=text)]}, as_node="agent")
         store.audit(user_id, "report_sent", report=name, chars=len(text))
 
+    def _audience(self, user_id: str) -> tuple | None:
+        """Hai người cùng role và cùng tập nguồn được xem thì nhận đúng một nội dung báo cáo."""
+        role = self.ws.role_of(user_id)
+        return None if role is None else (role, tuple(sorted(self.ws.sources_for(user_id, role))))
+
     async def send_now(self, name: str, only: list[str] | None = None, today: date | None = None) -> dict[str, str]:
         out: dict[str, str] = {}
+        # Dựng báo cáo một lần cho mỗi nhóm quyền (truy vấn + nhận xét AI), không phải một lần cho mỗi người nhận
+        built: dict[tuple, str | None] = {}
         for uid in only or self.recipients(self.config.reports[name]):
             try:
-                text = await self.build(name, uid, today)
+                group = self._audience(uid)
+                if group is None or group not in built:
+                    text = await self.build(name, uid, today)
+                    if group is not None:
+                        built[group] = text
+                else:
+                    text = built[group]
                 if text is None:
                     out[uid] = "bỏ qua (không có mục nào được xem)"
                     continue
