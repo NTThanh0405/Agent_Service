@@ -15,9 +15,28 @@ sửa code tuỳ ý. Có **hai phiên bản triển khai** dùng chung một mã
 | SQL Server | ODBC Driver có sẵn trên Windows | Build với `BIZAGENT_MSSQL=1` |
 | Hợp với | Máy chủ Windows sẵn có (cùng máy SQL Server / MISA / phần mềm kế toán) | VPS / máy chủ Linux, cloud |
 
-Mục lục: [Tính năng](#tính-năng) · [Chạy thử](#chạy-thử-5-phút) · [Bản Windows Server](#-bản-windows-server) ·
+> 📘 **Hướng dẫn chi tiết bản Word (tải về):** [docs/HUONG_DAN_CHI_TIET.docx](docs/HUONG_DAN_CHI_TIET.docx?raw=true)
+> — 16 chương, từng bước cho cá nhân và doanh nghiệp: cách hệ thống hoạt động, cài trên máy cá nhân / Windows Server /
+> Docker, cấu hình từng file workspace (kèm mẫu cho PostgreSQL, MySQL, SQL Server, Excel, Google Sheets, REST API),
+> tạo bot Telegram, Zalo, Slack, email Gmail/Microsoft 365, Power BI, tạo tài khoản database chỉ-đọc, sao lưu,
+> bảng khắc phục sự cố, tham chiếu lệnh và biến môi trường. Trên GitHub bấm vào link rồi chọn **Download raw file**.
+
+Mục lục: [Dùng cho ai](#dùng-cho-ai-chọn-cách-triển-khai) · [Tính năng](#tính-năng) ·
+[Cách hoạt động](#cách-bizagent-hoạt-động) · [Chạy thử](#chạy-thử-5-phút) · [Bản Windows Server](#-bản-windows-server) ·
 [Bản Linux (Docker)](#-bản-linux-docker) · [Cấu hình doanh nghiệp](#cấu-hình-cho-doanh-nghiệp-của-bạn) ·
-[Bảo mật](#bảo-mật) · [Lệnh](#lệnh-bizagent) · [Cấu trúc mã nguồn](#cấu-trúc-mã-nguồn)
+[Kênh chat](#kết-nối-kênh-chat-và-email) · [Bảo mật](#bảo-mật) · [Lệnh](#lệnh-bizagent) ·
+[Khắc phục sự cố](#khắc-phục-sự-cố) · [Cấu trúc mã nguồn](#cấu-trúc-mã-nguồn) · [Lộ trình](#lộ-trình)
+
+---
+
+## Dùng cho ai, chọn cách triển khai
+
+| Bạn là | Dùng để | Nên chạy |
+|---|---|---|
+| **Cá nhân / freelancer** | Hỏi đáp file Excel/CSV, Google Sheets thu chi, dữ liệu shop online; báo cáo email mỗi sáng | Laptop: [Chạy thử](#chạy-thử-5-phút) rồi `bizagent init` workspace riêng. Muốn dữ liệu không ra ngoài: model Ollama chạy trên máy |
+| **Cửa hàng, chuỗi nhỏ** | Doanh thu theo cửa hàng, món bán chạy, đạt mục tiêu; báo cáo Telegram/Zalo cho chủ | Máy Windows sẵn có (cùng máy phần mềm bán hàng): [Bản Windows Server](#-bản-windows-server) |
+| **Doanh nghiệp vừa** | Nhiều phòng ban, phân quyền theo vai trò, dashboard nội bộ, Power BI, audit | VPS Linux: [Bản Linux (Docker)](#-bản-linux-docker) + HTTPS |
+| **Đơn vị triển khai / IT** | Dựng cho nhiều khách hàng | Mỗi khách một thư mục workspace, một tiến trình/container |
 
 ---
 
@@ -32,6 +51,26 @@ Mục lục: [Tính năng](#tính-năng) · [Chạy thử](#chạy-thử-5-phút
 | **Dashboard** | Dashboard sống viết bằng YAML/SQL/JS, tự làm mới, không hết hạn, agent tạo được bằng lời · hoặc đưa dữ liệu sang **Power BI** |
 | **Vận hành** | Báo cáo định kỳ · trang quản trị `/admin` · cấp quyền theo người có hạn dùng · audit log · phiên chat lưu DB |
 | **An toàn** | Chỉ cho `SELECT` (kiểm tra theo từng loại database) · phiên DB chỉ-đọc · che cột cá nhân · reviewer đối chiếu mọi con số trong câu trả lời với dữ liệu |
+
+---
+
+## Cách bizagent hoạt động
+
+Mọi kênh (web, Telegram, Zalo, Slack, terminal, REST API) đi qua một điểm vào là `AgentService.ask()`:
+
+1. **Kênh nhận tin** và xác định người hỏi (`telegram:<id>`, `zalo:<id>`, `slack:<id>`, `web:<tên>`, `api:token`).
+2. **Tra role** trong `users.yaml` hoặc state DB. Người lạ bị bỏ qua (chỉ `/myid` được trả lời).
+3. **Lệnh cố định** (`/new`, `/sessions`, `/login`, `/adduser`, `/capquyen`…) xử lý bằng code, không gọi AI.
+4. **Kiểm tra hạn mức** (câu hỏi/phút, token/ngày), khoá cuộc trò chuyện, hàng đợi `max_concurrent`.
+5. **Ghép system prompt**: thông tin doanh nghiệp, ngày hôm nay, role, *chỉ các nguồn người này được xem*, `knowledge/*.md`.
+6. **Vòng agent ↔ tool (LangGraph)**: `get_date_range` (đổi "tuần này" ra ngày bằng code) → `list_tables` /
+   `describe_table` → `run_sql` / `call_api` → (tuỳ chọn) `list_dashboards` / `create_dashboard`, tool MCP.
+7. **Mỗi câu SQL**: kiểm tra quyền nguồn ở server → guard chỉ-SELECT + allowlist bảng → viết lại SQL để che cột cá nhân →
+   phiên DB chỉ-đọc, giới hạn dòng, huỷ khi quá giờ → ghi audit.
+8. **Reviewer** đối chiếu con số trong câu trả lời với dữ liệu vừa truy vấn; lưu lịch sử, mức dùng, audit; trả lời về kênh.
+
+Chạy nền trong cùng tiến trình (`bizagent run`): **đồng bộ** nguồn → kho DuckDB (`sync.yaml`), **báo cáo định kỳ**
+(`reports.yaml`, kiểm tra lịch mỗi phút), **xuất Power BI** (`powerbi.export`), **dọn** phiên chat/audit cũ mỗi giờ.
 
 ---
 
@@ -270,6 +309,7 @@ default_model: anthropic:claude-sonnet-5-5   # hoặc openai:<model>, google_gen
 
 | Tài liệu | Nội dung |
 |---|---|
+| [docs/HUONG_DAN_CHI_TIET.docx](docs/HUONG_DAN_CHI_TIET.docx?raw=true) | **Hướng dẫn đầy đủ bản Word** (tải về): cài đặt, cấu hình, kênh, bảo mật, vận hành, sự cố |
 | [docs/CONNECTORS.md](docs/CONNECTORS.md) | Database, REST API (Base.vn, iPOS, MISA), Google Sheets, CSV/Excel, kho DuckDB và đồng bộ |
 | [docs/DASHBOARDS.md](docs/DASHBOARDS.md) | Dashboard sống, Power BI, đăng nhập web |
 | [docs/REPORTS.md](docs/REPORTS.md) | Báo cáo định kỳ qua Telegram/Zalo/Slack |
@@ -277,6 +317,38 @@ default_model: anthropic:claude-sonnet-5-5   # hoặc openai:<model>, google_gen
 | [docs/MCP.md](docs/MCP.md) | Dùng MCP server làm nguồn; mở dữ liệu cho Claude Desktop/Cursor |
 | [docs/ADMIN.md](docs/ADMIN.md) | Người dùng, cấp quyền có hạn dùng, trang `/admin`, reviewer |
 | `workspaces/_template/` | Mẫu có chú thích cho từng file |
+
+---
+
+## Kết nối kênh chat và email
+
+**Telegram** (không cần mở cổng):
+
+1. Trên Telegram mở **@BotFather** → `/newbot` → đặt tên → nhận token.
+2. `.env`: `TELEGRAM_BOT_TOKEN=<token>`; cài extras `telegram`; chạy `bizagent run` (hoặc khởi động lại service/container).
+3. Nhắn `/myid` cho bot, thêm ID vào `workspaces/<ten>/users.yaml`:
+   ```yaml
+   users:
+     - {id: "telegram:123456789", name: "Giám đốc", role: admin}
+   ```
+4. Khởi động lại, nhắn `/start` rồi hỏi. Thêm nhân viên sau này: `/adduser <id> <role> [tên]` ngay trong chat
+   hoặc trên trang `/admin` (không cần khởi động lại).
+
+**Email báo cáo** (`.env`), người nhận `email:ten@congty.vn` trong `reports.yaml` hoặc `users.yaml`:
+
+| Dịch vụ | `SMTP_HOST` | Cổng / `SMTP_SECURITY` | Mật khẩu |
+|---|---|---|---|
+| Gmail / Google Workspace | `smtp.gmail.com` | 587 / `starttls` | **App Password** (bật xác minh 2 bước trước) |
+| Microsoft 365 | `smtp.office365.com` | 587 / `starttls` | Mật khẩu hộp thư (tài khoản phải bật SMTP AUTH) |
+
+**Zalo OA, Slack:** bật trong `channels.yaml`, webhook `<public_url>/zalo/webhook/<ZALO_WEBHOOK_SECRET>` và
+`<public_url>/slack/events` — từng bước trong [docs/CHANNELS.md](docs/CHANNELS.md) và bản Word.
+
+**Ứng dụng khác gọi API:**
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/chat -Headers @{Authorization="Bearer <BIZAGENT_API_TOKEN>"} -ContentType "application/json" -Body '{"message":"doanh thu hôm qua?","thread_id":"erp-1"}'
+```
 
 ---
 
@@ -321,6 +393,26 @@ lần; đăng xuất thu hồi mọi phiên của người đó. `/api/v1/health
 Mọi lệnh nhận `-w <workspace>` (mặc định lấy `BIZAGENT_WORKSPACE`, rồi `demo`).
 Chạy nhiều tiến trình cho cùng một workspace (vd `serve` và `telegram` riêng): đặt `BIZAGENT_BACKGROUND_TASKS=0`
 cho mọi tiến trình trừ một, để báo cáo không bị gửi trùng. Dùng `bizagent run` thì không cần.
+
+---
+
+## Khắc phục sự cố
+
+| Hiện tượng / thông báo | Cách xử lý |
+|---|---|
+| `Thiếu biến môi trường X` | Thêm `X=...` vào `.env` (gốc) hoặc `workspaces/<ten>/.env` |
+| `Model ... chưa cài gói` / `chưa đặt biến ..._API_KEY` | `pip install -e ".[anthropic]"` (đổi theo nhà cung cấp), điền key vào `.env` |
+| `Từ chối nghe trên 0.0.0.0 khi chưa đặt BIZAGENT_API_TOKEN…` | Đặt `BIZAGENT_API_TOKEN` hoặc tạo tài khoản web; hoặc chỉ nghe `127.0.0.1` |
+| `Nghe ngoài 127.0.0.1 cần BIZAGENT_SECRET_KEY` | `python -c "import secrets;print(secrets.token_urlsafe(32))"` → dán vào `.env` |
+| Bot Telegram im lặng | ID chưa có trong `users.yaml` (gõ `/myid` để lấy), hoặc đang nhắn trong group (bot chỉ trả lời chat riêng) |
+| `Không có quyền truy vấn bảng ...` / `Không có quyền dùng nguồn ...` | Sửa `allowed_tables`, `default_schema` (sources.yaml) hoặc `roles` (workspace.yaml) / `/capquyen` |
+| `Kho ... đang bị tiến trình khác khoá` | Server đang chạy: đồng bộ bằng nút **Chạy ngay** trên `/admin` thay vì `bizagent sync` |
+| `Câu hỏi xử lý quá lâu` / `vượt số bước` | Thu hẹp kỳ thời gian; tăng `timeout_seconds` / `max_steps`; dùng kho + dataset tổng hợp sẵn |
+| Email `Máy chủ mail từ chối đăng nhập` | Gmail cần App Password; kiểm tra `SMTP_USER` / `SMTP_PASSWORD` |
+| Báo cáo gửi hai lần | Hai tiến trình cùng chạy tác vụ nền: `BIZAGENT_BACKGROUND_TASKS=0` cho tiến trình phụ |
+
+Luôn chạy `bizagent check -w <ten>` trước tiên: lệnh này kiểm tra model, từng nguồn, đồng bộ, dashboard, kênh, SMTP và
+prompt, và chỉ ra dòng nào lỗi. Bảng đầy đủ hơn nằm trong bản Word.
 
 ---
 
@@ -372,7 +464,14 @@ Test không gọi model AI thật và không cần mạng. CI (GitHub Actions) c
 - [x] Báo cáo định kỳ, `/admin`, Slack, cấp quyền có hạn dùng, reviewer
 - [x] Hai phiên bản triển khai: Windows Server (Windows Service) và Linux (Docker)
 - [x] Báo cáo định kỳ qua email (SMTP, bản HTML có bảng)
-- [ ] Microsoft Teams · báo cáo PDF / file đính kèm · tách nhiều agent chuyên trách khi cần
+- [ ] Cảnh báo theo ngưỡng (vd doanh thu giảm > 20%, tồn kho dưới mức) gửi ngay qua chat/email
+- [ ] Xuất file từ chat (Excel/CSV), ảnh biểu đồ trên Telegram/Zalo · báo cáo PDF / Excel đính kèm email
+- [ ] Trang chat web: danh sách và xoá cuộc trò chuyện, hiển thị markdown/bảng, stream câu trả lời, đánh giá 👍/👎
+- [ ] Trình cấu hình nguồn dữ liệu trên `/admin` (không phải sửa YAML) · hiển thị giờ theo múi giờ workspace
+- [ ] Đăng nhập Google / Microsoft 365, xác thực hai lớp, tự đổi mật khẩu
+- [ ] Hỏi đáp tài liệu nội bộ (RAG trên PDF/Word) · lớp định nghĩa chỉ số có cấu trúc, câu hỏi đã lưu
+- [ ] `bizagent backup` · chi phí API theo VND / người · nhiều workspace trong một tiến trình
+- [ ] Microsoft Teams · bot trong group · tách nhiều agent chuyên trách khi cần
 
 Bản Nyna AI Agent trước đây (bot Telegram riêng cho chuỗi Nyna) được lưu ở tag git `nyna-v1`.
 
