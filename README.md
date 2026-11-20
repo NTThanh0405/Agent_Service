@@ -47,7 +47,7 @@ Mục lục: [Dùng cho ai](#dùng-cho-ai-chọn-cách-triển-khai) · [Tính n
 | **Dữ liệu** | PostgreSQL, MySQL/MariaDB, SQL Server, SQLite, Oracle… · REST API khai báo bằng YAML (Base.vn, iPOS, MISA…) · Google Sheets · file CSV/Excel · MCP server · kho DuckDB đồng bộ theo lịch để ghép dữ liệu nhiều nguồn |
 | **Model AI** | Claude, ChatGPT, Gemini, DeepSeek, Ollama (chạy trên máy), mọi API tương thích OpenAI — đổi bằng một dòng |
 | **Tuỳ chỉnh theo doanh nghiệp** | Mỗi doanh nghiệp một thư mục *workspace*: prompt (Jinja2), định nghĩa chỉ số, SQL mẫu, phân quyền |
-| **Kênh** | Trang chat web, REST API, Telegram, Zalo OA, Slack, terminal, Claude Desktop/Cursor (MCP) · báo cáo định kỳ qua cả email |
+| **Kênh** | Telegram, Zalo OA, Slack, terminal, Claude Desktop/Cursor (MCP), REST API cho phần mềm khác · báo cáo định kỳ qua cả email · web dành cho dashboard, Power BI, `/admin` |
 | **Dashboard** | Dashboard sống viết bằng YAML/SQL/JS, tự làm mới, không hết hạn, agent tạo được bằng lời · hoặc đưa dữ liệu sang **Power BI** |
 | **Vận hành** | Báo cáo định kỳ · trang quản trị `/admin` · cấp quyền theo người có hạn dùng · audit log · phiên chat lưu DB |
 | **An toàn** | Chỉ cho `SELECT` (kiểm tra theo từng loại database) · phiên DB chỉ-đọc · che cột cá nhân · reviewer đối chiếu mọi con số trong câu trả lời với dữ liệu |
@@ -56,7 +56,7 @@ Mục lục: [Dùng cho ai](#dùng-cho-ai-chọn-cách-triển-khai) · [Tính n
 
 ## Cách bizagent hoạt động
 
-Mọi kênh (web, Telegram, Zalo, Slack, terminal, REST API) đi qua một điểm vào là `AgentService.ask()`:
+Mọi kênh (Telegram, Zalo, Slack, terminal, REST API) đi qua một điểm vào là `AgentService.ask()`:
 
 1. **Kênh nhận tin** và xác định người hỏi (`telegram:<id>`, `zalo:<id>`, `slack:<id>`, `web:<tên>`, `api:token`).
 2. **Tra role** trong `users.yaml` hoặc state DB. Người lạ bị bỏ qua (chỉ `/myid` được trả lời).
@@ -112,8 +112,17 @@ bizagent check
 bizagent run
 ```
 
-Mở http://127.0.0.1:8000 (chat) · `/dashboards` · `/powerbi` · `/admin`. Trên máy cá nhân chưa đặt mật khẩu thì
-tự đăng nhập quyền admin. Thử hỏi: *"tháng này mỗi cửa hàng đạt bao nhiêu % mục tiêu?"*
+Mở http://127.0.0.1:8000/dashboards · `/powerbi` · `/admin`. Trên máy cá nhân chưa đặt mật khẩu thì
+tự đăng nhập quyền admin.
+
+Hỏi agent qua **Telegram / Zalo / Slack** (xem [Kết nối kênh chat](#kết-nối-kênh-chat-và-email)); muốn thử ngay chưa
+cần bot thì hỏi trong terminal (mở cửa sổ khác, kích hoạt venv):
+
+```bash
+bizagent chat
+```
+
+Thử hỏi: *"tháng này mỗi cửa hàng đạt bao nhiêu % mục tiêu?"*
 
 ---
 
@@ -359,8 +368,8 @@ Trước khi đưa ra Internet:
 - [ ] Tài khoản database **chỉ có quyền SELECT**, không đọc được cột cá nhân nếu có thể (lớp bảo vệ quan trọng nhất).
 - [ ] `.env` có `BIZAGENT_SECRET_KEY` và `BIZAGENT_API_TOKEN` (trình cài tự sinh); không commit `.env`, `users.yaml`.
 - [ ] Chỉ mở qua HTTPS (Cloudflare Tunnel / Caddy / IIS), đặt `BIZAGENT_PUBLIC_URL` bắt đầu bằng `https://`.
-- [ ] Tạo tài khoản web có mật khẩu (`bizagent hash-password <ten>` hoặc trang `/admin`); khi đã có tài khoản web,
-      trang chat yêu cầu đăng nhập.
+- [ ] Tạo tài khoản web có mật khẩu cho người xem dashboard / Power BI / `/admin` (`bizagent hash-password <ten>`
+      hoặc trang `/admin`); người dùng Telegram đăng nhập dashboard bằng lệnh `/login`.
 - [ ] `allowed_tables` (SQL), `operations` (API), `allowed_tools` (MCP) chỉ gồm thứ agent cần đọc.
 - [ ] Bật `reviewer` trong `agents.yaml` để gắn cờ con số không đối chiếu được với dữ liệu.
 
@@ -376,7 +385,7 @@ lần; đăng xuất thu hồi mọi phiên của người đó. `/api/v1/health
 | Lệnh | Việc |
 |---|---|
 | `bizagent run` | **Chạy thật**: web + bot Telegram (nếu có token) + tác vụ nền, một tiến trình |
-| `bizagent serve` | Chỉ web (chat, dashboard, Power BI, `/admin`, webhook Zalo/Slack) |
+| `bizagent serve` | Chỉ web (dashboard, Power BI, `/admin`, REST API, webhook Zalo/Slack) |
 | `bizagent telegram` | Chỉ bot Telegram |
 | `bizagent chat` | Chat trong terminal |
 | `bizagent check` | Kiểm tra model, nguồn dữ liệu, đồng bộ, dashboard, kênh |
@@ -386,6 +395,7 @@ lần; đăng xuất thu hồi mọi phiên của người đó. `/api/v1/health
 | `bizagent report <ten> [--preview] [--to id]` | Xem trước / gửi ngay báo cáo |
 | `bizagent powerbi-export` | Xuất file Parquet/CSV cho Power BI |
 | `bizagent audit [--user id]` | Xem audit log |
+| `bizagent usage [--user id\|all] [--days 30]` | Báo cáo mức dùng token (chỉ khi cần xem; trong chat gõ `/token`) |
 | `bizagent hash-password <ten>` | Tạo mật khẩu tài khoản web |
 | `bizagent mcp-server --role manager` | MCP server cho Claude Desktop / Cursor |
 | `bizagent seed-demo` | Tạo dữ liệu mẫu cho workspace demo |
@@ -426,7 +436,7 @@ bizagent/
 ├── sources/        nguồn dữ liệu: sql, rest, google_sheets, files, warehouse, mcp
 ├── security/       kiểm tra chỉ-SELECT theo dialect, che dữ liệu cá nhân
 ├── dashboards/     dataset, dashboard sống, Power BI
-├── channels/       web (chat, dashboard, /admin), Telegram, Zalo, Slack, lệnh chung
+├── channels/       web (dashboard, /admin, REST API), Telegram, Zalo, Slack, lệnh chung
 ├── reports.py      báo cáo định kỳ          sync.py      đồng bộ về kho
 ├── state.py        phiên chat, audit, người dùng, quyền cấp riêng (SQLite/PostgreSQL)
 ├── access.py       quản lý người dùng & quyền    webauth.py   đăng nhập web
@@ -466,8 +476,8 @@ Test không gọi model AI thật và không cần mạng. CI (GitHub Actions) c
 - [x] Báo cáo định kỳ qua email (SMTP, bản HTML có bảng)
 - [ ] Cảnh báo theo ngưỡng (vd doanh thu giảm > 20%, tồn kho dưới mức) gửi ngay qua chat/email
 - [ ] Xuất file từ chat (Excel/CSV), ảnh biểu đồ trên Telegram/Zalo · báo cáo PDF / Excel đính kèm email
-- [ ] Trang chat web: danh sách và xoá cuộc trò chuyện, hiển thị markdown/bảng, stream câu trả lời, đánh giá 👍/👎
-- [ ] Trình cấu hình nguồn dữ liệu trên `/admin` (không phải sửa YAML) · hiển thị giờ theo múi giờ workspace
+- [ ] Đánh giá câu trả lời 👍/👎 ngay trong Telegram/Zalo để cải thiện knowledge
+- [ ] Trình cấu hình nguồn dữ liệu trên `/admin` (không phải sửa YAML)
 - [ ] Đăng nhập Google / Microsoft 365, xác thực hai lớp, tự đổi mật khẩu
 - [ ] Hỏi đáp tài liệu nội bộ (RAG trên PDF/Word) · lớp định nghĩa chỉ số có cấu trúc, câu hỏi đã lưu
 - [ ] `bizagent backup` · chi phí API theo VND / người · nhiều workspace trong một tiến trình

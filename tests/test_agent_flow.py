@@ -77,4 +77,5 @@ def test_rest_api(demo_ws, fake_model_cls, monkeypatch):
         assert client.post("/api/v1/chat", json={"message": "hi"}).status_code == 401
         r = client.post("/api/v1/chat", json={"message": "hi"}, headers={"Authorization": "Bearer s3cret"})
         assert r.json()["answer"] == "Xin chào"
-        assert "Chuỗi cà phê Demo" in client.get("/").text
+        root = client.get("/", follow_redirects=False)                 # không có trang chat web
+        assert root.status_code == 303 and root.headers["location"] == "/dashboards"

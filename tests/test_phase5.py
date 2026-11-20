@@ -160,6 +160,19 @@ async def test_report_commentary_kept_when_numbers_match(report_env, fake_model_
     await svc.aclose()
 
 
+async def test_report_commentary_tokens_counted(report_env, fake_model_cls):
+    usage = {"input_tokens": 1200, "output_tokens": 80, "total_tokens": 1280}
+    model = fake_model_cls(responses=[AIMessage(content="Ổn định.", usage_metadata=usage)], seen=[])
+    svc = AgentService(report_env, model=model)
+    rr = ReportRunner(svc, senders={"telegram": FakeSender(), "zalo": FakeSender()})
+    await rr.build("bao_cao_sang", "telegram:10", today=date(2026, 11, 19))
+    day = svc._today()
+    assert svc.store.kv_get(f"usage:{day}:report:bao_cao_sang") == {"asks": 1, "tokens_in": 1200, "tokens_out": 80}
+    row = svc.store.audit_rows(10, "report:bao_cao_sang")[0]
+    assert row["kind"] == "report_commentary" and row["detail"]["tokens_in"] == 1200
+    await svc.aclose()
+
+
 async def test_report_schedule(report_env, fake_model_cls):
     svc = AgentService(report_env, model=fake_model_cls(responses=[AIMessage(content="x")] * 10, seen=[]))
     tg, zl = FakeSender(), FakeSender()

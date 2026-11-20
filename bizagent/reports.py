@@ -467,14 +467,15 @@ class ReportRunner:
             return None
         report = ReportOut(spec.title, label, sections)
         if spec.commentary:
-            report.commentary = await self.commentary(report.body_text(), data_texts)
+            report.commentary = await self.commentary(report.body_text(), data_texts, name)
         cat = self.service.catalog
         if spec.dashboard and cat and cat.config.public_url and cat.can_view(spec.dashboard, role, user_id):
             report.dashboard_url = cat.link(spec.dashboard)
         return report
 
-    async def commentary(self, report: str, data_texts: list[str]) -> str | None:
-        """2–3 câu nhận xét do AI viết; có con số không đối chiếu được với báo cáo thì bỏ."""
+    async def commentary(self, report: str, data_texts: list[str], name: str = "") -> str | None:
+        """2–3 câu nhận xét do AI viết; có con số không đối chiếu được với báo cáo thì bỏ.
+        Token của lượt gọi model này được cộng vào mức dùng của người dùng hệ thống `report:<tên báo cáo>`."""
         from langchain_core.messages import HumanMessage, SystemMessage
 
         from bizagent.agent.service import message_text
@@ -488,11 +489,21 @@ class ReportRunner:
         except Exception as e:
             log.warning("Nhận xét báo cáo lỗi: %s", e)
             return None
+        await self._record_usage(name, msg)
         note = message_text(msg).strip()
         if not note or unverified(note, data_texts):
             log.info("Bỏ nhận xét báo cáo vì có số không đối chiếu được")
             return None
         return note
+
+    async def _record_usage(self, name: str, msg: Any) -> None:
+        """Token của nhận xét AI: tính vào mức dùng trong ngày (bảng trên /admin) và audit, như câu hỏi chat."""
+        usage = getattr(msg, "usage_metadata", None) or {}
+        t_in, t_out = int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0)
+        uid = f"report:{name or '?'}"
+        store = self.service.store
+        await asyncio.to_thread(store.add_usage, self.service._today(), uid, t_in, t_out)
+        await asyncio.to_thread(store.audit, uid, "report_commentary", report=name, tokens_in=t_in, tokens_out=t_out)
 
     async def deliver(self, name: str, user_id: str, report: ReportOut) -> None:
         channel, chat_id = user_id.split(":", 1)

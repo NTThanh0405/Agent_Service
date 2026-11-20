@@ -88,7 +88,7 @@ def mount_admin(app: FastAPI, service, get_principal: Callable, page: Callable[[
                     s = state.get(job) or {}
                     last = s.get("last_success")
                     sync_rows.append([e(job), e(j.table), e(s.get("status", "chưa chạy")),
-                                      e(f"{last:%Y-%m-%d %H:%M} UTC" if last else "-"),
+                                      e(f"{ws.local_time(last):%Y-%m-%d %H:%M}" if last else "-"),
                                       e(str(s.get("rows") or "")), e(s.get("error") or ""),
                                       btn(f"/admin/sync/{job}", "Chạy ngay", {})])
             parts.append(card("Nguồn dữ liệu", table(["Nguồn", "Loại", "Mô tả", "Trạng thái"], rows)
@@ -117,7 +117,7 @@ def mount_admin(app: FastAPI, service, get_principal: Callable, page: Callable[[
         grows = []
         for g in await asyncio.to_thread(store.list_grants, None, True):
             expired = g["expires_at"] is not None and g["expires_at"] < utc_now()
-            until = f"{g['expires_at']:%Y-%m-%d %H:%M} UTC" if g["expires_at"] else "không hết hạn"
+            until = f"{ws.local_time(g['expires_at']):%Y-%m-%d %H:%M}" if g["expires_at"] else "không hết hạn"
             grows.append([e(g["user_id"]), e(g["source"]), e(until + (" (đã hết hạn)" if expired else "")),
                           e(g["granted_by"]), btn("/admin/grants/revoke", "Thu hồi",
                                                   {"user": g["user_id"], "source": g["source"]})])
@@ -286,10 +286,10 @@ def mount_admin(app: FastAPI, service, get_principal: Callable, page: Callable[[
             rows = [r for r in rows if r["kind"] == kind]
         import json as _json
 
-        trs = [[e(f"{r['ts']:%Y-%m-%d %H:%M:%S}"), e(r["user_id"]), e(r["kind"]),
+        trs = [[e(f"{ws.local_time(r['ts']):%Y-%m-%d %H:%M:%S}"), e(r["user_id"]), e(r["kind"]),
                 f'<code>{e(_json.dumps(r["detail"], ensure_ascii=False)[:400])}</code>'] for r in rows]
         filt = (f'<form class="filters" style="padding:0 0 10px"><label>Người dùng<input name="user" value="{e(user)}">'
                 f'</label><label>Loại<input name="kind" value="{e(kind)}" placeholder="ask, sql, sql_denied, grant...">'
                 '</label><button type="submit" style="align-self:flex-end">Lọc</button></form>')
-        return page("Audit log", filt + table(["Thời điểm (UTC)", "Người dùng", "Loại", "Chi tiết"], trs)
+        return page("Audit log", filt + table([f"Thời điểm ({ws.info.timezone})", "Người dùng", "Loại", "Chi tiết"], trs)
                     + '<p><a href="/admin">← Quản trị</a></p>')

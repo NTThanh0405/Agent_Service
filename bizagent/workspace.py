@@ -21,8 +21,10 @@ import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -187,6 +189,14 @@ class Workspace:
     def env(self) -> dict[str, str]:
         """Biến đặc biệt dùng được trong YAML."""
         return {"WORKSPACE_DIR": self.path.as_posix()}
+
+    def local_time(self, dt: datetime | None) -> datetime | None:
+        """Giờ lưu trong DB (UTC, naive hoặc có tzinfo) -> giờ theo múi giờ của workspace để hiển thị."""
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(ZoneInfo(self.info.timezone))
 
     def all_users(self) -> list[UserEntry]:
         """users.yaml (ưu tiên) + người dùng lưu trong state DB."""

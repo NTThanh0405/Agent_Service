@@ -62,7 +62,7 @@ bizagent = "bizagent.cli:main"
 include = ["bizagent*"]
 
 [tool.setuptools.package-data]
-bizagent = ["prompts/*.j2", "channels/static/*"]   # chat.html, dashboard.html/.js/.css
+bizagent = ["prompts/*.j2", "channels/static/*"]   # dashboard.html/.js/.css
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

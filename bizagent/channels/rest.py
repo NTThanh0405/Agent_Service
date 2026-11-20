@@ -1,8 +1,9 @@
-"""Web server: REST API chat, trang chat, dashboard sống, dữ liệu cho Power BI.
+"""Web server: dashboard sống, dữ liệu cho Power BI, trang /admin, REST API chat cho phần mềm khác.
+Người dùng trò chuyện với agent qua Telegram / Zalo / Slack (web không có trang chat).
 
-    POST /api/v1/chat                       {"message": "...", "thread_id": "abc"}
+    POST /api/v1/chat                       {"message": "...", "thread_id": "abc"}  (Bearer token)
     GET  /api/v1/health
-    GET  /                                  trang chat
+    GET  /                                  chuyển tới /dashboards
     GET  /login, POST /login, GET /logout   đăng nhập tài khoản web
     GET  /login/link?t=...                  link đăng nhập gửi qua Telegram (/login)
     GET  /dashboards, /d/<slug>             danh sách và trang dashboard sống
@@ -36,11 +37,12 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 DASH_CSP = ("default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
 STATIC_FILES = {"dashboard.js": "application/javascript", "dashboard.css": "text/css"}
+THREAD_ID = r"^[A-Za-z0-9_.:-]+$"
 
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
-    thread_id: str = Field(default="default", max_length=100, pattern=r"^[A-Za-z0-9_.:-]+$")
+    thread_id: str = Field(default="default", max_length=100, pattern=THREAD_ID)
 
 
 class ChatResponse(BaseModel):
@@ -53,7 +55,7 @@ def _page(title: str, body: str) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
 <title>{html.escape(title)}</title><link rel="stylesheet" href="/static/dashboard.css"></head>
 <body><header class="top"><div class="titles"><h1>{html.escape(title)}</h1></div>
-<div class="status"><a href="/dashboards">Dashboard</a> · <a href="/powerbi">Power BI</a> · <a href="/">Chat</a> · <a href="/admin">Quản trị</a>
+<div class="status"><a href="/dashboards">Dashboard</a> · <a href="/powerbi">Power BI</a> · <a href="/admin">Quản trị</a>
  · <a href="/logout">Đăng xuất</a></div></header><main style="padding:20px;max-width:1100px">{body}</main></body></html>"""
 
 
@@ -217,21 +219,17 @@ def create_app(service: AgentService) -> FastAPI:
         resp.delete_cookie(SESSION_COOKIE)
         return resp
 
-    # ------------------------------------------------------------------ chat
+    # ------------------------------------------------------------------ chat (API cho phần mềm khác)
+    # Người dùng trò chuyện qua Telegram / Zalo / Slack; web không có trang chat.
     @app.post("/api/v1/chat", response_model=ChatResponse)
     async def chat(req: ChatRequest, request: Request) -> ChatResponse:
         p = require_api(request)
         answer = await service.ask(req.message, user_id=p.user_id, role=p.role, thread_id=req.thread_id)
         return ChatResponse(answer=answer, thread_id=req.thread_id)
 
-    @app.get("/", response_class=HTMLResponse)
-    def index(request: Request):
-        if auth.has_web_users:                      # có tài khoản web: phải đăng nhập
-            p = require_page(request)
-            if isinstance(p, RedirectResponse):
-                return p
-        page = (STATIC_DIR / "chat.html").read_text(encoding="utf-8")
-        return page.replace("{{TITLE}}", html.escape(service.ws.info.display_name or service.ws.name))
+    @app.get("/")
+    def index():
+        return RedirectResponse("/dashboards", 303)
 
     # ------------------------------------------------------------------ dashboard sống
     @app.get("/dashboards", response_class=HTMLResponse)
@@ -253,7 +251,7 @@ def create_app(service: AgentService) -> FastAPI:
                              f'target="_blank" rel="noopener">{html.escape(r.title)} ↗</a></h2>'
                              f'<div class="note">{html.escape(r.description)}</div><div class="meta">Power BI</div>'
                              "</section>")
-        if p.role == "admin" and cat.errors:
+        if p.role in service.ws.info.admin_roles and cat.errors:
             errs = "".join(f"<li><b>{html.escape(k)}</b>: {html.escape(v)}</li>" for k, v in cat.errors.items())
             items.append(f'<section class="card" style="grid-column:1/-1"><h2>Dashboard lỗi cấu hình</h2>'
                          f'<ul class="err">{errs}</ul></section>')

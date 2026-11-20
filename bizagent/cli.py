@@ -7,9 +7,10 @@
     bizagent chat    [-w ten] [--role admin]   chat trong terminal
     bizagent sync    [-w ten] [job...] [--status] [--due]   đồng bộ dữ liệu về kho DuckDB
     bizagent run     [-w ten] [--host --port]  CHẠY THẬT: web + bot Telegram + tác vụ nền trong một tiến trình
-    bizagent serve   [-w ten] [--host --port]  chỉ web: chat, dashboard sống, Power BI, /admin (+ tác vụ nền)
+    bizagent serve   [-w ten] [--host --port]  chỉ web: dashboard sống, Power BI, /admin, API (+ tác vụ nền)
     bizagent mcp-server [-w ten] [--role manager]  MCP server (stdio) cho Claude Desktop / Cursor...
     bizagent audit   [-w ten] [--user id] [--limit 50]  xem audit log
+    bizagent usage   [-w ten] [--user id|all] [--days 30]  báo cáo mức dùng token (khi cần, không theo lịch)
     bizagent report <ten> [-w ten] [--to id] [--preview]  xem trước / gửi ngay báo cáo định kỳ
     bizagent hash-password <ten>   tạo mật khẩu cho tài khoản web
     bizagent powerbi-export [-w ten]           xuất file Parquet/CSV cho Power BI ngay
@@ -266,7 +267,7 @@ def cmd_serve(args) -> int:
 
 
 def cmd_run(args) -> int:
-    """Một tiến trình cho tất cả: web (chat, dashboard, Power BI, /admin, webhook Zalo/Slack) + bot Telegram
+    """Một tiến trình cho tất cả: web (dashboard, Power BI, /admin, API, webhook Zalo/Slack) + bot Telegram
     (nếu có TELEGRAM_BOT_TOKEN) + tác vụ nền (đồng bộ, báo cáo, xuất Power BI). Dùng cho Windows Service và Docker."""
     args.with_telegram = bool(os.environ.get("TELEGRAM_BOT_TOKEN")) and not args.no_telegram
     if args.with_telegram:
@@ -299,7 +300,7 @@ def cmd_sync(args) -> int:
                 if not s:
                     print(f"{name:24} -> {job.table:24} chưa chạy")
                     continue
-                last = s["last_success"].astimezone().strftime("%Y-%m-%d %H:%M") if s["last_success"] else "-"
+                last = ws.local_time(s["last_success"]).strftime("%Y-%m-%d %H:%M") if s["last_success"] else "-"
                 err = f"  lỗi: {s['error']}" if s["status"] != "ok" else ""
                 print(f"{name:24} -> {s['table_name']:24} {s['status']:5} {s['rows'] or 0:>8} dòng  "
                       f"thành công lần cuối {last}{err}")
@@ -380,12 +381,45 @@ def cmd_audit(args) -> int:
     from bizagent.state import StateStore
     from bizagent.workspace import load_workspace
 
-    store = StateStore.for_workspace(load_workspace(args.workspace))
+    ws = load_workspace(args.workspace)
+    store = StateStore.for_workspace(ws)
     for r in reversed(store.audit_rows(limit=args.limit, user_id=args.user)):
         detail = json.dumps(r["detail"], ensure_ascii=False)
-        print(f"{r['ts']:%Y-%m-%d %H:%M:%S} UTC  {r['user_id']:24} {r['kind']:16} {detail[:160]}")
+        print(f"{ws.local_time(r['ts']):%Y-%m-%d %H:%M:%S}  {r['user_id']:24} {r['kind']:16} {detail[:160]}")
     store.close()
     return 0
+
+
+def cmd_usage(args) -> int:
+    """Báo cáo mức dùng token khi được hỏi (không nằm trong báo cáo định kỳ)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from bizagent.state import StateStore
+    from bizagent.usage import UsageError, usage_report, usage_rows
+    from bizagent.workspace import load_workspace
+
+    ws = load_workspace(args.workspace)
+    store = StateStore.for_workspace(ws)
+    today = datetime.now(ZoneInfo(ws.info.timezone)).date()
+    try:
+        if args.user:
+            admin_role = ws.info.admin_roles[0] if ws.info.admin_roles else None   # người chạy CLI là quản trị máy chủ
+            print(usage_report(ws, store, today, ("cli:local", admin_role), [args.user]))
+            return 0
+        rows = usage_rows(store, today, args.days)
+        print(f"Mức dùng token {args.days} ngày gần nhất (tới {today:%d/%m/%Y}):")
+        for r in rows:
+            print(f"{r['user']:32} {r['asks']:>6} lượt  vào {r['tokens_in']:>12,}  ra {r['tokens_out']:>10,}  "
+                  f"tổng {r['tokens_in'] + r['tokens_out']:>12,}")
+        if not rows:
+            print("(chưa có lượt dùng nào)")
+        return 0
+    except UsageError as e:
+        print(e)
+        return 1
+    finally:
+        store.close()
 
 
 def cmd_report(args) -> int:
@@ -489,8 +523,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--user", default=None)
     sp.add_argument("--limit", type=int, default=50)
     sp.set_defaults(func=cmd_audit)
+    sp = sub.add_parser("usage", help="báo cáo mức dùng token (khi cần xem, không gửi theo lịch)")
+    ws_arg(sp)
+    sp.add_argument("--user", default=None, help="một người: telegram:123, report:bao_cao_sang... hoặc all")
+    sp.add_argument("--days", type=int, default=30)
+    sp.set_defaults(func=cmd_usage)
 
-    for name, func, help_ in (("serve", cmd_serve, "web: chat, dashboard, Power BI, /admin"),
+    for name, func, help_ in (("serve", cmd_serve, "web: dashboard, Power BI, /admin, API"),
                               ("run", cmd_run, "chạy tất cả trong một tiến trình: web + bot Telegram + tác vụ nền")):
         sp = sub.add_parser(name, help=help_)
         ws_arg(sp)
