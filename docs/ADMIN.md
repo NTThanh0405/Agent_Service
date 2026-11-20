@@ -53,8 +53,10 @@ limits:
   exempt_roles: [admin]       # role không bị giới hạn tần suất / token
 ```
 
-- Token mỗi câu hỏi lấy từ số liệu model báo về (`usage_metadata`), ghi vào audit (`tokens_in`, `tokens_out`) và
-  cộng dồn theo ngày (múi giờ workspace). Trang `/admin` có bảng **Mức dùng hôm nay**. Mức dùng giữ 90 ngày.
+- Token mỗi câu hỏi lấy từ số liệu model báo về (`usage_metadata`) của **mọi** lượt gọi model, ghi vào audit
+  (`tokens_in`, `tokens_out`) và cộng dồn theo ngày (múi giờ workspace). Trang `/admin` có bảng **Mức dùng hôm nay**.
+  Mức dùng giữ 90 ngày. Chế độ nhiều agent ghi thêm token theo từng agent (`agents`) và đường router chọn (`route`),
+  xem [AGENTS.md](AGENTS.md).
 - Cùng một cuộc trò chuyện, hai tin nhắn gửi liên tiếp được xử lý lần lượt (không ghi chồng lịch sử).
 - Báo cáo định kỳ dựng một lần cho mỗi nhóm người nhận cùng role và cùng nguồn được xem (truy vấn + nhận xét AI).
 

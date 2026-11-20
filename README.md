@@ -65,6 +65,9 @@ Mọi kênh (web, Telegram, Zalo, Slack, terminal, REST API) đi qua một đi�
 5. **Ghép system prompt**: thông tin doanh nghiệp, ngày hôm nay, role, *chỉ các nguồn người này được xem*, `knowledge/*.md`.
 6. **Vòng agent ↔ tool (LangGraph)**: `get_date_range` (đổi "tuần này" ra ngày bằng code) → `list_tables` /
    `describe_table` → `run_sql` / `call_api` → (tuỳ chọn) `list_dashboards` / `create_dashboard`, tool MCP.
+   Bật `multi_agent` trong `agents.yaml` để tách thành nhiều agent chuyên trách: **router** chọn đường → **analyst**
+   lấy số liệu → **advisor** viết đánh giá và đề xuất chỉ dựa trên số liệu đó; **designer** lo dashboard
+   ([docs/AGENTS.md](docs/AGENTS.md)).
 7. **Mỗi câu SQL**: kiểm tra quyền nguồn ở server → guard chỉ-SELECT + allowlist bảng → viết lại SQL để che cột cá nhân →
    phiên DB chỉ-đọc, giới hạn dòng, huỷ khi quá giờ → ghi audit.
 8. **Reviewer** đối chiếu con số trong câu trả lời với dữ liệu vừa truy vấn; lưu lịch sử, mức dùng, audit; trả lời về kênh.
@@ -271,7 +274,7 @@ Mọi thứ riêng của một doanh nghiệp nằm trong **một thư mục wor
 workspaces/cong_ty_a/
 ├── workspace.yaml    tên, ngôn ngữ, múi giờ, tiền tệ, role → nguồn được xem, ai được quản trị
 ├── sources.yaml      database / API / Google Sheets / file / MCP (mật khẩu dùng ${BIEN}, đặt trong .env)
-├── agents.yaml       model AI, số bước, timeout, reviewer
+├── agents.yaml       model AI, số bước, timeout, reviewer, chế độ nhiều agent
 ├── knowledge/*.md    định nghĩa chỉ số, bối cảnh kinh doanh, SQL mẫu → ghép vào prompt
 ├── prompts/          ghi đè prompt lõi (Jinja2)
 ├── datasets.yaml     truy vấn dùng chung cho dashboard, Power BI, báo cáo
@@ -316,6 +319,7 @@ default_model: anthropic:claude-sonnet-5-5   # hoặc openai:<model>, google_gen
 | [docs/CHANNELS.md](docs/CHANNELS.md) | Telegram, Zalo OA, phiên chat, audit |
 | [docs/MCP.md](docs/MCP.md) | Dùng MCP server làm nguồn; mở dữ liệu cho Claude Desktop/Cursor |
 | [docs/ADMIN.md](docs/ADMIN.md) | Người dùng, cấp quyền có hạn dùng, trang `/admin`, reviewer |
+| [docs/AGENTS.md](docs/AGENTS.md) | Nhiều agent chuyên trách: router, analyst, advisor (đánh giá, đề xuất), designer |
 | `workspaces/_template/` | Mẫu có chú thích cho từng file |
 
 ---
@@ -381,7 +385,7 @@ lần; đăng xuất thu hồi mọi phiên của người đó. `/api/v1/health
 | `bizagent chat` | Chat trong terminal |
 | `bizagent check` | Kiểm tra model, nguồn dữ liệu, đồng bộ, dashboard, kênh |
 | `bizagent init <ten>` | Tạo workspace từ mẫu |
-| `bizagent prompt` | In system prompt đã ghép |
+| `bizagent prompt` | In system prompt đã ghép (`--agent advisor`: prompt từng agent khi bật nhiều agent) |
 | `bizagent sync [job] [--status]` | Đồng bộ dữ liệu về kho |
 | `bizagent report <ten> [--preview] [--to id]` | Xem trước / gửi ngay báo cáo |
 | `bizagent powerbi-export` | Xuất file Parquet/CSV cho Power BI |
@@ -420,7 +424,7 @@ prompt, và chỉ ra dòng nào lỗi. Bảng đầy đủ hơn nằm trong bả
 
 ```
 bizagent/
-├── agent/          AgentService (điểm vào cho mọi kênh), graph LangGraph, tool của agent
+├── agent/          AgentService (điểm vào cho mọi kênh), graph một agent / nhiều agent (team.py), tool, đếm token
 ├── llm/            "provider:model" → chat model, bảng năng lực từng model
 ├── prompts/        prompt lõi + engine ghi đè theo workspace
 ├── sources/        nguồn dữ liệu: sql, rest, google_sheets, files, warehouse, mcp
@@ -464,6 +468,8 @@ Test không gọi model AI thật và không cần mạng. CI (GitHub Actions) c
 - [x] Báo cáo định kỳ, `/admin`, Slack, cấp quyền có hạn dùng, reviewer
 - [x] Hai phiên bản triển khai: Windows Server (Windows Service) và Linux (Docker)
 - [x] Báo cáo định kỳ qua email (SMTP, bản HTML có bảng)
+- [x] Nhiều agent chuyên trách (router, analyst, advisor đánh giá + đề xuất, designer), model riêng từng agent,
+      token theo từng agent
 - [ ] Cảnh báo theo ngưỡng (vd doanh thu giảm > 20%, tồn kho dưới mức) gửi ngay qua chat/email
 - [ ] Xuất file từ chat (Excel/CSV), ảnh biểu đồ trên Telegram/Zalo · báo cáo PDF / Excel đính kèm email
 - [ ] Trang chat web: danh sách và xoá cuộc trò chuyện, hiển thị markdown/bảng, stream câu trả lời, đánh giá 👍/👎
@@ -471,7 +477,7 @@ Test không gọi model AI thật và không cần mạng. CI (GitHub Actions) c
 - [ ] Đăng nhập Google / Microsoft 365, xác thực hai lớp, tự đổi mật khẩu
 - [ ] Hỏi đáp tài liệu nội bộ (RAG trên PDF/Word) · lớp định nghĩa chỉ số có cấu trúc, câu hỏi đã lưu
 - [ ] `bizagent backup` · chi phí API theo VND / người · nhiều workspace trong một tiến trình
-- [ ] Microsoft Teams · bot trong group · tách nhiều agent chuyên trách khi cần
+- [ ] Microsoft Teams · bot trong group · agent viết code phân tích (Python sandbox) trong nhóm agent
 
 Bản Nyna AI Agent trước đây (bot Telegram riêng cho chuỗi Nyna) được lưu ở tag git `nyna-v1`.
 

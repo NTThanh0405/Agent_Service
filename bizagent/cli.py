@@ -87,6 +87,22 @@ def cmd_check(args) -> int:
     problems = check_provider_ready(rm)
     print(f"Model: {rm.label} -> {'sẵn sàng' if not problems else '; '.join(problems)}")
     ok &= not problems
+    team = ws.agents.multi_agent
+    agent_prompts = ["system.md.j2"]
+    if team.enabled:                                  # chế độ nhiều agent: model riêng từng agent
+        for name in ("router", "analyst", "advisor", "designer"):
+            if not getattr(team, name).enabled:
+                print(f"Agent {name}: tắt")
+                continue
+            try:
+                arm = resolve_model(ws.agents, ws.agents.settings_for(name).model)
+                problems = check_provider_ready(arm)
+                print(f"Agent {name}: {arm.label} -> {'sẵn sàng' if not problems else '; '.join(problems)}")
+            except Exception as e:
+                problems = [str(e)]
+                print(f"Agent {name}: LỖI: {e}")
+            ok &= not problems
+            agent_prompts.append(f"{name}.md.j2")
 
     reg = SourceRegistry(ws)
     for name, err in reg.errors.items():
@@ -161,8 +177,11 @@ def cmd_check(args) -> int:
     for role in ws.info.roles:
         print(f"Role {role}: nguồn {ws.sources_for_role(role) or '(không có)'}")
     try:
-        PromptEngine(ws).render("system.md.j2", role="admin", sources=[])
-        print("Prompt: OK")
+        engine = PromptEngine(ws)
+        for name in agent_prompts:
+            engine.render(name, role="admin", sources=[], routes=("phan_tich", "tra_cuu", "dashboard"),
+                          route="phan_tich", advisor_follows=True)
+        print(f"Prompt: OK ({', '.join(agent_prompts)})")
     except Exception as e:
         print(f"Prompt: LỖI: {e}")
         ok = False
@@ -179,7 +198,10 @@ def cmd_prompt(args) -> int:
     reg = SourceRegistry(ws)
     sources = [{"name": s.name, "kind": s.kind, "dialect": s.dialect, "description": s.description}
                for s in reg.for_role(args.role)]
-    print(PromptEngine(ws).render("system.md.j2", role=args.role, sources=sources))
+    template = f"{args.agent}.md.j2" if args.agent else "system.md.j2"
+    print(PromptEngine(ws).render(template, role=args.role, sources=sources,
+                                  routes=("phan_tich", "tra_cuu", "dashboard"), route="phan_tich",
+                                  advisor_follows=True))
     reg.close()
     return 0
 
@@ -455,6 +477,9 @@ def build_parser() -> argparse.ArgumentParser:
         sp = sub.add_parser(name, help=help_)
         ws_arg(sp)
         sp.add_argument("--role", default="admin")
+        if name == "prompt":
+            sp.add_argument("--agent", choices=["router", "analyst", "advisor", "designer"],
+                            help="in prompt của một agent trong chế độ nhiều agent")
         sp.set_defaults(func=func)
 
     sp = sub.add_parser("sync", help="đồng bộ dữ liệu về kho (sync.yaml)")

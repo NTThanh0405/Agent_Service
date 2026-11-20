@@ -1,7 +1,7 @@
-"""Graph LangGraph của agent: model <-> tool cho tới khi có câu trả lời.
+"""Graph LangGraph của chế độ một agent (mặc định): model <-> tool cho tới khi có câu trả lời.
 
-Giai đoạn 1 dùng một agent duy nhất (gọn, dễ sửa). Các agent chuyên trách (analyst, coder, designer,
-reviewer) của bản Nyna sẽ được thêm thành node riêng ở giai đoạn sau mà không đổi giao diện AgentService.
+Chế độ nhiều agent chuyên trách (router, analyst, advisor, designer) nằm ở `bizagent.agent.team`, bật bằng
+agents.yaml: multi_agent.enabled. Hai chế độ dùng chung giao diện AgentService.ask().
 """
 
 from __future__ import annotations
@@ -16,6 +16,16 @@ from langgraph.graph import START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from bizagent.llm.registry import ModelCapabilities
+
+
+def message_text(msg: Any) -> str:
+    """Nội dung chữ của tin nhắn (một số model trả content dạng danh sách khối)."""
+    content = getattr(msg, "content", msg)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
+    return str(content)
 
 
 def system_message(text: str, caps: ModelCapabilities) -> SystemMessage:

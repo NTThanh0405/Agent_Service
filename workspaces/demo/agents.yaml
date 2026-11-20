@@ -11,6 +11,10 @@ agent:
   max_tokens: 3000
   temperature: null
 
+multi_agent:              # nhiều agent chuyên trách (docs/AGENTS.md); true = có phần đánh giá & đề xuất
+  enabled: false
+  router: {model: fast}
+
 reviewer:                 # đối chiếu mọi con số trong câu trả lời với dữ liệu đã truy vấn (bằng code)
   enabled: true
   add_note: true
